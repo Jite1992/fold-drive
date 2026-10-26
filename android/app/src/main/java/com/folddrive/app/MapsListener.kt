@@ -83,6 +83,27 @@ class MapsListener : NotificationListenerService() {
         e.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.let { lines ->
             o.put("lines", JSONArray(lines.map { it.toString() }))
         }
+        o.put("when", n.`when`)
+        // Every simple field in the notification, so new Android "live update" fields
+        // (progress, status-bar chip text) can be read too.
+        val all = JSONObject()
+        for (key in e.keySet()) {
+            try {
+                @Suppress("DEPRECATION")
+                when (val v = e.get(key)) {
+                    null -> {}
+                    is CharSequence -> if (v.isNotBlank()) all.put(key, v.toString().take(200))
+                    is Number, is Boolean -> all.put(key, v)
+                    is Array<*> -> {
+                        val items = v.filterIsInstance<CharSequence>().map { it.toString() }
+                        if (items.isNotEmpty()) all.put(key, JSONArray(items.take(10)))
+                        else all.put(key, "[" + v.size + " items]")
+                    }
+                    else -> all.put(key, "<" + v.javaClass.simpleName + ">")
+                }
+            } catch (_: Exception) { }
+        }
+        o.put("extras", all)
         try {
             val icon = n.getLargeIcon()
             if (icon != null) {

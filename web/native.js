@@ -33,8 +33,14 @@
   function parseMaps(n) {
     if (!n || !n.active) return null;
     var head = n.title || n.titleBig || '';
-    var fields = [n.title, n.titleBig, n.text, n.sub, n.info, n.summary, n.big].concat(n.lines || []).filter(Boolean);
-    var out = { raw: fields.join('  |  '), icon: n.icon || '', time: n.time };
+    var ex = n.extras || {}, extraText = [];
+    Object.keys(ex).forEach(function (k) {
+      var v = ex[k];
+      if (typeof v === 'string' && v.charAt(0) !== '<' && !/^android\.(title|text|subText|bigText|infoText|summaryText|template)$/.test(k)) extraText.push(v);
+    });
+    var fields = [n.title, n.titleBig, n.text, n.sub, n.info, n.summary, n.big].concat(n.lines || [], extraText).filter(Boolean)
+      .filter(function (f, i, arr) { return arr.indexOf(f) === i; });
+    var out = { raw: fields.join('  |  '), icon: n.icon || '', time: n.time, extras: ex };
     var m = head.match(DIST), t = n.text || '';
     var isSummary = function (s) { return /ETA|arriv|\b\d+\s*min\b|\b\d+\s*hr\b/i.test(s); };
     if (m) {
@@ -53,6 +59,25 @@
     var tm = summ.match(/(?:(\d+)\s*(?:hr|h|hours?)\s*)?(\d+)\s*min/i);
     if (tm) out.leftMin = parseInt(tm[1] || '0', 10) * 60 + parseInt(tm[2], 10);
     else { var th = summ.match(/(\d+)\s*(?:hr|h|hours?)\b/i); if (th) out.leftMin = parseInt(th[1], 10) * 60; }
+    // no distance in the title: look for one in any other field (e.g. the status-bar chip text)
+    if (out.turnM == null) {
+      for (var fi = 0; fi < fields.length; fi++) {
+        var fm = fields[fi] !== summ ? fields[fi].match(/(?:^|\s)(\d+(?:[.,]\d+)?)\s*(km|m)\b/i) : null;
+        if (fm && !isSummary(fields[fi])) { out.turnM = toMetres(fm[1], fm[2]); break; }
+      }
+    }
+    // time left from the arrival time when Maps doesn't say it
+    if (out.leftMin == null && out.eta) {
+      var em = out.eta.match(/(\d{1,2}):(\d{2})\s*([ap])?/i);
+      if (em) {
+        var h = parseInt(em[1], 10), mi = parseInt(em[2], 10), ap = (em[3] || '').toLowerCase();
+        if (ap === 'p' && h < 12) h += 12; if (ap === 'a' && h === 12) h = 0;
+        var nowD = new Date(), at = new Date(nowD); at.setHours(h, mi, 0, 0);
+        if (at - nowD < -5 * 60000) at.setDate(at.getDate() + 1);
+        out.leftMin = Math.max(0, Math.round((at - nowD) / 60000));
+        out.leftFromEta = true;
+      }
+    }
     var km = summ.match(/(\d+(?:[.,]\d+)?)\s*km\b/i);
     if (km) out.leftKm = parseFloat(km[1].replace(',', '.'));
     else { var mm = summ.match(/(\d+)\s*m\b/); if (mm) out.leftKm = parseInt(mm[1], 10) / 1000; }
@@ -219,7 +244,8 @@
       '<div class="toggle">Floating stats bubble over Google Maps<button type="button" data-a="pref" data-k="overlay" aria-pressed="' + !!s.overlayOn + '"></button></div>' +
       '<p>Last directions read from Google Maps:</p><div class="empty" style="font-size:13px;word-break:break-word">' +
       (d ? U.esc(d.raw) + '<br><br>Turn: ' + (d.turnM != null ? Math.round(d.turnM) + ' m' : '–') + ' · ' + U.esc(d.instr || '–') +
-        '<br>Time left: ' + (d.leftMin != null ? d.leftMin + ' min' : '–') + ' · Km left: ' + (d.leftKm != null ? d.leftKm : '–') + ' · ETA: ' + U.esc(d.eta || '–')
+        '<br>Time left: ' + (d.leftMin != null ? d.leftMin + ' min' + (d.leftFromEta ? ' (from arrival time)' : '') : '–') + ' · Km left: ' + (d.leftKm != null ? d.leftKm : '–') + ' · ETA: ' + U.esc(d.eta || '–') +
+        '<br><br><b>All fields:</b><br>' + Object.keys(d.extras || {}).map(function (k) { return U.esc(k.replace(/^android\./, '')) + ' = ' + U.esc(JSON.stringify(d.extras[k])); }).join('<br>')
         : 'Nothing yet. Start navigation in Google Maps, then come back here.') +
       '</div><p>If these numbers look wrong, send a screenshot of this box to Claude so the reading can be adjusted.</p></section>';
   };

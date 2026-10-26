@@ -9,6 +9,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.location.Geocoder
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -56,10 +57,36 @@ class TripService : Service(), LocationListener {
         instance = this
         startForeground(NOTIF_ID, buildNotification("Recording your trip"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         startLocation()
+        lookUpDestination()
         handler.removeCallbacks(tick)
         handler.post(tick)
         return START_NOT_STICKY
     }
+
+    /** Finds the destination's coordinates on the phone (no key needed), for the km-left estimate. */
+    private fun lookUpDestination() {
+        if (dest.has("lat") && !dest.isNull("lat")) return
+        val q = dest.optString("query").ifBlank { dest.optString("name") }
+        if (q.isBlank() || !Geocoder.isPresent()) return
+        val forDest = dest
+        val ctx = this
+        Thread {
+            try {
+                val g = Geocoder(ctx, Locale.ENGLISH)
+                val inUae = geocode(g, q, true)
+                val r = inUae ?: geocode(g, q, false)
+                if (r != null && forDest === dest) {
+                    handler.post { dest.put("lat", r.latitude); dest.put("lng", r.longitude); dest.put("geocoded", true) }
+                }
+            } catch (_: Exception) { }
+        }.start()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun geocode(g: Geocoder, q: String, uaeOnly: Boolean): android.location.Address? = try {
+        val list = if (uaeOnly) g.getFromLocationName(q, 1, 22.5, 51.5, 26.5, 56.5) else g.getFromLocationName(q, 1)
+        list?.firstOrNull()
+    } catch (_: Exception) { null }
 
     private fun startLocation() {
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
