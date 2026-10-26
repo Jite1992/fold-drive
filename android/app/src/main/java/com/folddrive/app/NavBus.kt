@@ -10,6 +10,9 @@ object NavBus {
     /** Unread WhatsApp / Business messages and missed calls, read from notifications. */
     @Volatile var counts: JSONObject = JSONObject()
 
+    /** Unread chats per app: {"whatsapp":[...], "business":[...]}. */
+    @Volatile var chats: JSONObject = JSONObject()
+
     @Volatile var listenerConnected = false
 
     /** True while Fold Drive is on screen (full screen or split screen). */

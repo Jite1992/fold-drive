@@ -193,8 +193,57 @@ class MainActivity : Activity() {
         if (openMaps) launchMaps(JSONObject(destJson))
     }
 
-    fun stopTrip() {
+    fun stopTrip(exitMaps: Boolean) {
         stopService(Intent(this, TripService::class.java))
+        if (!exitMaps) return
+        val pressed = MapsListener.exitNavigation()
+        // Bring Fold Drive to the front, then close Google Maps once it is in the background.
+        main.postDelayed({
+            try {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+            } catch (_: Exception) { }
+        }, if (pressed) 600L else 0L)
+        main.postDelayed({
+            try { getSystemService(android.app.ActivityManager::class.java)?.killBackgroundProcesses(MAPS) } catch (_: Exception) { }
+        }, 2500L)
+    }
+
+    fun openChat(key: String, app: String) {
+        val pi = MapsListener.chatIntents[key]
+        if (pi != null) {
+            try { pi.send(); return } catch (_: Exception) { }
+        }
+        openApp(app)
+    }
+
+    /** Coordinates for an address, using the phone's own geocoder (no key needed). */
+    @Suppress("DEPRECATION")
+    fun geocode(q: String): String = try {
+        val g = android.location.Geocoder(this, java.util.Locale.ENGLISH)
+        val r = g.getFromLocationName(q, 1, 22.5, 51.5, 26.5, 56.5)?.firstOrNull() ?: g.getFromLocationName(q, 1)?.firstOrNull()
+        if (r == null) "null" else JSONObject().put("lat", r.latitude).put("lng", r.longitude).toString()
+    } catch (_: Exception) { "null" }
+
+    fun readCalendars(): String {
+        val arr = JSONArray()
+        if (!granted(Manifest.permission.READ_CALENDAR)) return arr.toString()
+        val proj = arrayOf(
+            CalendarContract.Calendars._ID, CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+            CalendarContract.Calendars.ACCOUNT_NAME, CalendarContract.Calendars.ACCOUNT_TYPE, CalendarContract.Calendars.VISIBLE
+        )
+        try {
+            contentResolver.query(CalendarContract.Calendars.CONTENT_URI, proj, null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    arr.put(JSONObject()
+                        .put("id", c.getLong(0))
+                        .put("name", c.getString(1) ?: "Calendar")
+                        .put("account", c.getString(2) ?: "")
+                        .put("type", c.getString(3) ?: "")
+                        .put("visible", c.getInt(4) == 1))
+                }
+            }
+        } catch (_: Exception) { }
+        return arr.toString()
     }
 
     fun launchMaps(dest: JSONObject) {
@@ -309,11 +358,12 @@ class MainActivity : Activity() {
         ContentUris.appendId(builder, now + 40L * 3_600_000L)
         val proj = arrayOf(
             CalendarContract.Instances.TITLE, CalendarContract.Instances.BEGIN, CalendarContract.Instances.END,
-            CalendarContract.Instances.EVENT_LOCATION, CalendarContract.Instances.ALL_DAY
+            CalendarContract.Instances.EVENT_LOCATION, CalendarContract.Instances.ALL_DAY,
+            CalendarContract.Instances.CALENDAR_ID, CalendarContract.Instances.CALENDAR_DISPLAY_NAME
         )
         try {
             contentResolver.query(builder.build(), proj, null, null, CalendarContract.Instances.BEGIN + " ASC")?.use { c ->
-                while (c.moveToNext() && arr.length() < 12) {
+                while (c.moveToNext() && arr.length() < 40) {
                     val end = c.getLong(2)
                     if (end < now) continue
                     arr.put(JSONObject()
@@ -321,7 +371,9 @@ class MainActivity : Activity() {
                         .put("begin", c.getLong(1))
                         .put("end", end)
                         .put("location", c.getString(3) ?: "")
-                        .put("allDay", c.getInt(4) == 1))
+                        .put("allDay", c.getInt(4) == 1)
+                        .put("cal", c.getLong(5))
+                        .put("calName", c.getString(6) ?: ""))
                 }
             }
         } catch (_: Exception) { }

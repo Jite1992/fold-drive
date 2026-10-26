@@ -13,6 +13,8 @@
     FD.status = J(A.status()) || {};
     FD.counts = J(A.counts()) || {};
     FD.events = FD.status.calendar ? (J(A.events()) || []) : [];
+    FD.calendars = FD.status.calendar ? (J(A.calendars()) || []) : [];
+    FD.chats = J(A.chats()) || {};
   };
   FD.refreshNative();
   FD.onResume = function () {
@@ -98,7 +100,7 @@
     startPoll();
   };
   N.end = function () {
-    var s = J(A.endTrip());
+    var s = J(A.endTrip(true));
     stopPoll();
     var t = N.trip; N.trip = null;
     if (!t) return null;
@@ -114,6 +116,15 @@
     if (s && s.active) {
       t.distance = s.distance; t.speed = s.speed; t.top = s.top; t.startedAt = s.startedAt;
       t.hasPos = s.hasPos; t.straight = s.straight; t.gps = s.gps;
+      if (s.hasPos) t.pos = { lat: s.lat, lng: s.lng };
+      if (t.dest && s.dest && s.dest.lat != null) { t.dest.lat = s.dest.lat; t.dest.lng = s.dest.lng; }
+    }
+    // live traffic on the route (optional TomTom key): every 2 minutes
+    if (FD.traffic && FD.traffic.hasKey() && t.dest && t.dest.lat != null && t.pos && !t.ttBusy && (!t.ttAt || Date.now() - t.ttAt > 120000)) {
+      t.ttBusy = true; t.ttAt = Date.now();
+      FD.traffic.route(t.pos, { lat: t.dest.lat, lng: t.dest.lng })
+        .then(function (r) { t.tt = r; }).catch(function () { })
+        .then(function () { t.ttBusy = false; });
     }
     var n = J(A.nav());
     t.maps = (n && n.active && n.time >= t.startedAt - 120000) ? parseMaps(n) : null;
@@ -176,12 +187,22 @@
       dest: t.dest ? t.dest.name : 'Free drive'
     };
     var left = mp && mp.leftMin != null ? mp.leftMin : null;
-    var remKm = mp && mp.leftKm != null ? mp.leftKm : (t.straight != null ? t.straight / 1000 * 1.3 : null);
+    var alerts = '';
+    if (mp && /traffic|delay|slower|faster route|accident|crash|closure|closed|heavy/i.test(mp.raw)) {
+      var line = mp.raw.split('  |  ').filter(function (f) { return /traffic|delay|slower|faster route|accident|crash|closure|closed|heavy/i.test(f); })[0];
+      alerts += '<div class="alert">' + ic('clock', 18, 'currentColor', 2.2) + '<span class="grow"><b>Google Maps:</b> ' + U.esc(line) + '</span></div>';
+    }
+    var ttFresh = t.tt && Date.now() - t.tt.at < 300000;
+    var exactKm = mp && mp.leftKm != null ? mp.leftKm : (ttFresh ? Math.max(0, t.tt.km - (t.distance - (t.ttDistAt || 0)) / 1000) : null);
+    if (ttFresh && t.ttDistAt == null) t.ttDistAt = t.distance;
+    if (t.tt && t.tt.at !== t.ttSeen) { t.ttSeen = t.tt.at; t.ttDistAt = t.distance; }
+    var remKm = exactKm != null ? exactKm : (t.straight != null ? t.straight / 1000 * 1.3 : null);
+    if (left == null && ttFresh) left = t.tt.mins;
     v.left = left != null ? String(left) : '–';
     var total = Math.round(el / 60) + (left || 0);
     v.total = total >= 60 ? Math.floor(total / 60) + ':' + pad(total % 60) : String(total);
     v.totalU = total >= 60 ? ' h:min' : ' min';
-    v.rem = remKm != null ? ((mp && mp.leftKm != null) ? '' : '≈') + fmt(remKm, 1) : '–';
+    v.rem = remKm != null ? (exactKm != null ? '' : '≈') + fmt(remKm, 1) : '–';
     v.eta = mp && mp.eta ? mp.eta : (left != null ? U.hhmm(new Date(Date.now() + left * 60000)) : '--:--');
     v.prog = remKm != null && km + remKm > 0 ? Math.round(100 * km / (km + remKm)) : 0;
     v.sub = mp ? (mp.summary || 'Following Google Maps') : (t.dest ? 'Waiting for Google Maps' : 'Recording your drive');
@@ -208,7 +229,9 @@
     if (!FD.status.location) hint = '<button type="button" class="btn amber" data-a="perm" data-p="location">Allow location</button>';
     else if (t.dest && !FD.status.notif) hint = '<button type="button" class="btn amber" data-a="perm" data-p="notif">Allow Notification access</button><span class="s12 mute">Lets Fold Drive read turns, time and km left from Google Maps.</span>';
     else if (!t.hasPos) hint = '<span class="s13 mute">Waiting for GPS…</span>';
-    v.hint = hint;
+    if (t.tt && t.tt.delayMin >= 2) alerts = '<div class="alert">' + ic('clock', 18, 'currentColor', 2.2) + '<span class="grow"><b>Traffic delay +' + t.tt.delayMin + ' min</b> on your route</span></div>' + alerts;
+    alerts += FD.trafficAlertsHTML ? FD.trafficAlertsHTML(t.tt) : '';
+    v.hint = alerts + hint;
     return v;
   }
   N.updateScreen = function () {

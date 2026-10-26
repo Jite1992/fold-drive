@@ -1,20 +1,26 @@
 package com.folddrive.app
 
 import android.app.Notification
+import android.app.PendingIntent
+import android.app.Person
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.os.Bundle
+import android.os.Parcelable
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Reads Google Maps' navigation notification (next turn, time left, km left, ETA)
- * and counts unread WhatsApp messages and missed calls. Needs "Notification access".
+ * Reads Google Maps' navigation notification (next turn, arrival time), can press its
+ * "Exit navigation" button, and reads unread WhatsApp chats and missed calls.
+ * Needs "Notification access".
  */
 class MapsListener : NotificationListenerService() {
 
@@ -26,25 +32,42 @@ class MapsListener : NotificationListenerService() {
             "com.samsung.android.dialer", "com.google.android.dialer", "com.android.server.telecom",
             "com.samsung.android.incallui", "com.android.phone"
         )
+        @Volatile var instance: MapsListener? = null
+        /** Opens a particular chat: notification key -> the notification's tap action. */
+        val chatIntents = ConcurrentHashMap<String, PendingIntent>()
         private var lastIconKey = ""
         private var lastIcon = ""
+
+        /** Presses "Exit navigation" on Google Maps' notification. Returns true if found. */
+        fun exitNavigation(): Boolean {
+            val svc = instance ?: return false
+            val list = try { svc.activeNotifications?.filter { it.packageName == MAPS } } catch (_: Exception) { null } ?: return false
+            val words = Regex("exit|end|stop|close|quit", RegexOption.IGNORE_CASE)
+            for (sbn in list) {
+                val action = sbn.notification.actions?.firstOrNull { words.containsMatchIn(it.title?.toString() ?: "") } ?: continue
+                try { action.actionIntent.send(); return true } catch (_: Exception) { }
+            }
+            return false
+        }
     }
 
     override fun onListenerConnected() {
+        instance = this
         NavBus.listenerConnected = true
         try {
             activeNotifications?.forEach { if (it.packageName == MAPS && isNav(it)) readMaps(it) }
         } catch (_: Exception) { }
-        refreshCounts()
+        refreshChats()
     }
 
     override fun onListenerDisconnected() {
         NavBus.listenerConnected = false
+        instance = null
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == MAPS && isNav(sbn)) readMaps(sbn)
-        if (sbn.packageName == WA || sbn.packageName == WAB || sbn.packageName in DIALERS) refreshCounts()
+        if (sbn.packageName == WA || sbn.packageName == WAB || sbn.packageName in DIALERS) refreshChats()
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
@@ -57,7 +80,7 @@ class MapsListener : NotificationListenerService() {
                 NavBus.nav = n
             }
         }
-        if (sbn.packageName == WA || sbn.packageName == WAB || sbn.packageName in DIALERS) refreshCounts()
+        if (sbn.packageName == WA || sbn.packageName == WAB || sbn.packageName in DIALERS) refreshChats()
     }
 
     private fun isNav(sbn: StatusBarNotification): Boolean {
@@ -84,8 +107,8 @@ class MapsListener : NotificationListenerService() {
             o.put("lines", JSONArray(lines.map { it.toString() }))
         }
         o.put("when", n.`when`)
-        // Every simple field in the notification, so new Android "live update" fields
-        // (progress, status-bar chip text) can be read too.
+        o.put("actions", JSONArray((n.actions ?: emptyArray()).map { it.title?.toString() ?: "" }))
+        // Every simple field, so newer "live update" fields (progress, status-bar chip text) can be read too.
         val all = JSONObject()
         for (key in e.keySet()) {
             try {
@@ -134,8 +157,11 @@ class MapsListener : NotificationListenerService() {
         return "data:image/png;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
-    private fun refreshCounts() {
+    /** Unread chats (with their messages) for WhatsApp and Business, plus missed calls. */
+    private fun refreshChats() {
         val active = try { activeNotifications } catch (_: Exception) { null } ?: return
+        val msgsRe = Regex("(\\d+)\\s+(?:new\\s+)?messages", RegexOption.IGNORE_CASE)
+        val callsRe = Regex("(\\d+)\\s+missed\\s+calls", RegexOption.IGNORE_CASE)
 
         fun textOf(sbn: StatusBarNotification): String {
             val e = sbn.notification.extras
@@ -143,23 +169,54 @@ class MapsListener : NotificationListenerService() {
                 .joinToString(" ") { e.getCharSequence(it)?.toString() ?: "" }
         }
 
-        fun count(pkgs: Set<String>, pattern: Regex, filter: (StatusBarNotification) -> Boolean): Int {
-            val list = active.filter { it.packageName in pkgs && filter(it) }
-            var best = 0
+        val chats = JSONObject()
+        val counts = JSONObject()
+        for ((key, pkg) in listOf("whatsapp" to WA, "business" to WAB)) {
+            val list = active.filter { it.packageName == pkg }
+            val arr = JSONArray()
+            var total = 0
+            var summaryCount = 0
             for (sbn in list) {
-                pattern.find(textOf(sbn))?.let { m -> best = maxOf(best, m.groupValues[1].toIntOrNull() ?: 0) }
+                val n = sbn.notification
+                val e = n.extras
+                if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0) {
+                    msgsRe.find(textOf(sbn))?.let { summaryCount = maxOf(summaryCount, it.groupValues[1].toIntOrNull() ?: 0) }
+                    continue
+                }
+                val title = (e.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE) ?: e.getCharSequence(Notification.EXTRA_TITLE))?.toString() ?: "Chat"
+                val lines = JSONArray()
+                @Suppress("DEPRECATION")
+                val msgs: Array<Parcelable>? = e.getParcelableArray(Notification.EXTRA_MESSAGES)
+                if (msgs != null && msgs.isNotEmpty()) {
+                    for (p in msgs.takeLast(5)) {
+                        val b = p as? Bundle ?: continue
+                        val text = b.getCharSequence("text")?.toString() ?: continue
+                        @Suppress("DEPRECATION")
+                        val sender = b.getCharSequence("sender")?.toString()
+                            ?: (b.getParcelable<Person>("sender_person"))?.name?.toString()
+                            ?: ""
+                        lines.put(JSONObject().put("from", sender).put("text", text).put("time", b.getLong("time")))
+                    }
+                } else {
+                    val big = e.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+                    if (big != null) big.takeLast(5).forEach { lines.put(JSONObject().put("from", "").put("text", it.toString())) }
+                    else e.getCharSequence(Notification.EXTRA_TEXT)?.let { lines.put(JSONObject().put("from", "").put("text", it.toString())) }
+                }
+                val count = maxOf(1, msgs?.size ?: lines.length())
+                total += count
+                n.contentIntent?.let { chatIntents[sbn.key] = it }
+                arr.put(JSONObject().put("key", sbn.key).put("title", title).put("count", count).put("time", sbn.postTime).put("lines", lines))
             }
-            if (best > 0) return best
-            return list.count { (it.notification.flags and Notification.FLAG_GROUP_SUMMARY) == 0 }
+            chats.put(key, arr)
+            counts.put(key, maxOf(total, summaryCount))
         }
-
-        val msgs = Regex("(\\d+)\\s+(?:new\\s+)?messages", RegexOption.IGNORE_CASE)
-        val calls = Regex("(\\d+)\\s+missed\\s+calls", RegexOption.IGNORE_CASE)
-        val o = JSONObject()
-        o.put("whatsapp", count(setOf(WA), msgs) { true })
-        o.put("business", count(setOf(WAB), msgs) { true })
-        o.put("missed", count(DIALERS, calls) { textOf(it).contains("missed", ignoreCase = true) })
-        o.put("time", System.currentTimeMillis())
-        NavBus.counts = o
+        val missedList = active.filter { it.packageName in DIALERS && textOf(it).contains("missed", ignoreCase = true) }
+        var missed = 0
+        for (sbn in missedList) callsRe.find(textOf(sbn))?.let { missed = maxOf(missed, it.groupValues[1].toIntOrNull() ?: 0) }
+        if (missed == 0) missed = missedList.count { (it.notification.flags and Notification.FLAG_GROUP_SUMMARY) == 0 }
+        counts.put("missed", missed)
+        counts.put("time", System.currentTimeMillis())
+        NavBus.chats = chats
+        NavBus.counts = counts
     }
 }

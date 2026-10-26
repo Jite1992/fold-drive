@@ -78,7 +78,7 @@
   /* ---------- UI state ---------- */
   var S = {
     screen: 'home', prev: 'home', layout: layoutNow(),
-    showForm: false, form: { date: isoDay(), odo: '', litres: '', rate: '' }, err: '',
+    showForm: false, form: { date: isoDay(), odo: '', litres: '', amount: '', rate: '' }, err: '', chatApp: null, traffic: {},
     search: { nav: { q: '', list: [], msg: '' }, pick: { q: '', list: [], msg: '' } },
     modal: null, picker: null, summary: null
   };
@@ -91,9 +91,13 @@
     cal: 'https://calendar.google.com/calendar/r'
   };
   function badge(n) { return n ? '<span class="badge">' + n + '</span>' : ''; }
+  function shownEvents() {
+    var hidden = settings.hiddenCals || [];
+    return (FD.events || []).filter(function (e) { return hidden.indexOf(String(e.cal)) < 0; });
+  }
   function nextEvent() {
     var now = Date.now();
-    return (FD.events || []).filter(function (e) { return !e.allDay && e.begin > now - 15 * 60000; })[0] || null;
+    return shownEvents().filter(function (e) { return !e.allDay && e.begin > now - 15 * 60000; })[0] || null;
   }
   function appTiles(L) {
     var i = L === 'i';
@@ -104,8 +108,8 @@
       };
       return '<div class="apps">' +
         tile('', 'calls', 'phone', '#162338', '#6EA8FE', 'Calls', c.missed ? c.missed + ' missed' : (contactsSet() ? 'Quick dial' : 'Dialer'), c.missed) +
-        tile('whatsapp', 'open', 'wa', '#13291E', '#4ADE80', 'WhatsApp', c.whatsapp ? c.whatsapp + ' unread' : 'Open chats', c.whatsapp) +
-        tile('business', 'open', 'wab', '#10292A', '#34C3B5', i ? 'WA Business' : 'Business', c.business ? c.business + (i ? ' client chats' : ' unread') : (i ? 'Client chats' : 'Clients'), c.business) +
+        tile('whatsapp', 'chats', 'wa', '#13291E', '#4ADE80', 'WhatsApp', c.whatsapp ? c.whatsapp + ' unread' : 'Open chats', c.whatsapp) +
+        tile('business', 'chats', 'wab', '#10292A', '#34C3B5', i ? 'WA Business' : 'Business', c.business ? c.business + (i ? ' client chats' : ' unread') : (i ? 'Client chats' : 'Clients'), c.business) +
         tile('calendar', 'open', 'cal', '#2B2414', '#F5A524', 'Calendar', ev ? 'Next ' + hhmm(new Date(ev.begin)) : 'Today', 0) +
         '</div>';
     }
@@ -132,7 +136,7 @@
     });
     var totL = 0, totKm = 0, spent = 0, measured = 0;
     rows.forEach(function (r) {
-      spent += r.e.litres * r.e.rate;
+      spent += r.e.paid || r.e.litres * r.e.rate;
       if (r.km !== null) { totL += r.e.litres; totKm += r.km; measured++; }
     });
     var avg = totL > 0 ? totKm / totL : 0;
@@ -154,17 +158,32 @@
     E.forEach(function (e) { if (e.date <= date) prev = e; else if (!next) next = e; });
     return { prev: prev, next: next };
   }
+  /* Price per litre on a given date: this month's official price, or last month's for older dates. */
+  function priceFor(date) {
+    if (!date || !prices.updated || date >= prices.updated) return currentPrice();
+    var prev = prices.previous && prices.previous[settings.grade];
+    return prev || currentPrice();
+  }
+  function byAmount() { return settings.fuelInput === 'amount'; }
+  /* Litres and cost for what's typed in the form, whichever way it was entered. */
+  function formFill() {
+    var fm = S.form, rate = priceFor(fm.date || isoDay());
+    var litres, amount;
+    if (byAmount()) { amount = parseFloat(fm.amount); litres = amount > 0 && rate > 0 ? amount / rate : NaN; }
+    else { litres = parseFloat(fm.litres); amount = litres > 0 ? litres * rate : NaN; }
+    return { rate: rate, litres: litres, amount: amount };
+  }
   function previewText() {
-    var fm = S.form, nb = neighbours(fm.date || isoDay());
-    var odo = parseFloat(fm.odo), l = parseFloat(fm.litres), r = parseFloat(fm.rate || currentPrice());
-    if (!nb.prev) return 'This is your starting odometer reading. km/L starts from your next fill-up.';
-    if (!(odo > 0)) return 'Last reading: ' + fmt(nb.prev.odo) + ' km on ' + dayLabel(nb.prev.date) + '.';
+    var fm = S.form, nb = neighbours(fm.date || isoDay()), f = formFill();
+    var odo = parseFloat(fm.odo);
+    var fill = f.litres > 0 ? fmt(f.litres, 1) + ' L · AED ' + fmt(f.amount, 2) + ' at AED ' + fmt(f.rate, 2) + '/L' : 'Price: AED ' + fmt(f.rate, 2) + '/L (' + settings.grade + ')';
+    if (!nb.prev) return 'Starting odometer reading · ' + fill;
+    if (!(odo > 0)) return 'Last reading: ' + fmt(nb.prev.odo) + ' km on ' + dayLabel(nb.prev.date) + ' · ' + fill;
     var km = odo - nb.prev.odo;
     if (km <= 0) return 'Enter more than ' + fmt(nb.prev.odo) + ' km, the reading on ' + dayLabel(nb.prev.date) + '.';
     var s = fmt(km) + ' km since last fill';
-    if (l > 0) s += ' · ' + fmt(km / l, 1) + ' km/L';
-    if (l > 0 && r > 0) s += ' · AED ' + fmt(l * r, 2);
-    return s;
+    if (f.litres > 0) s += ' · ' + fmt(km / f.litres, 1) + ' km/L';
+    return s + ' · ' + fill;
   }
 
   /* ---------- fuel prices (auto-update) ---------- */
@@ -249,9 +268,10 @@
   function placeBtn(p, i, style) {
     var isSet = p.lat || p.query;
     var label = isSet ? p.name : 'Set ' + p.name;
-    if (style === 'qp') return '<button type="button" data-a="place" data-i="' + i + '">' + ic(p.icon, 16, 'currentColor', 2.2) + esc(label) + '</button>';
+    var tr = isSet ? trafficFor(i) : '';
+    if (style === 'qp') return '<button type="button" data-a="place" data-i="' + i + '">' + ic(p.icon, 16, 'currentColor', 2.2) + esc(label) + (tr ? ' · ' + tr.split(' · ')[0] : '') + '</button>';
     return '<button type="button" data-a="place" data-i="' + i + '">' + ic(p.icon, 20, 'currentColor', 2.2) + '<span class="ell">' + esc(label) + '</span>' +
-      (isSet ? ic('nav', 18, 'currentColor', 2.2) : '<small class="s13" style="font-weight:600">Add address</small>') + '</button>';
+      (isSet ? (tr ? '<small class="s13" style="font-weight:700">' + tr + '</small>' : ic('nav', 18, 'currentColor', 2.2)) : '<small class="s13" style="font-weight:600">Add address</small>') + '</button>';
   }
   function fuelChip() {
     var F = calcFuel();
@@ -278,13 +298,13 @@
   }
   function agendaCard() {
     var now = Date.now();
-    var list = (FD.events || []).filter(function (e) { return e.end > now; }).slice(0, 4);
+    var list = shownEvents().filter(function (e) { return e.end > now; }).slice(0, 4);
     var rows = list.map(function (e) {
       var d = new Date(e.begin), idx = FD.events.indexOf(e);
       var when = e.allDay ? 'All day' : hhmm(d);
       var day = new Date().toDateString() === d.toDateString() ? '' : ' · tomorrow';
       return '<div class="trow"><span style="width:56px;font:600 20px var(--display);color:var(--amber);flex-shrink:0">' + when + '</span>' +
-        '<span class="grow"><b class="ell">' + esc(e.title) + '</b><span class="s13 mute ell" style="display:block">' + esc(e.location || 'No location') + day + '</span></span>' +
+        '<span class="grow"><b class="ell">' + esc(e.title) + '</b><span class="s13 mute ell" style="display:block">' + esc(e.location || 'No location') + day + (e.calName ? ' · ' + esc(e.calName) : '') + '</span></span>' +
         (e.location ? '<button type="button" class="sq amberbtn" data-a="evnav" data-i="' + idx + '" aria-label="Navigate">' + ic('nav', 18, 'currentColor', 2.4) + '</button>' : '') + '</div>';
     }).join('');
     return '<div class="recent card"><div class="sb"><div style="font-weight:600;font-size:20px">Today & tomorrow</div><span class="lab">' + fmt(weekKm()) + ' km this week</span></div>' +
@@ -297,7 +317,7 @@
       '<button type="button" class="sq greybtn" style="border-radius:999px" data-a="screen" data-s="settings" aria-label="Settings">' + ic('sliders', 20) + '</button></div>' +
       tripBanner() + setupBanner() + nextCard() +
       '<div class="navp"><div class="sb"><h2>Navigate</h2>' + ic('nav', 26, 'currentColor', 2.2) + '</div>' + searchBox('c', 'Where to?') +
-      '<div class="qp">' + placeBtn(settings.places[0], 0, 'qp') + placeBtn(settings.places[1], 1, 'qp') + '</div></div>' +
+      '<div class="qp">' + placeBtn(settings.places[0], 0, 'qp') + placeBtn(settings.places[1], 1, 'qp') + '</div></div>' + trafficAlert() +
       appTiles('c') +
       '<button type="button" class="fuelrow" data-a="screen" data-s="fuel">' + ic('fuel', 22, '#F5A524') + '<b>Fuel · ' + (F.avg ? fmt(F.avg, 1) + ' km/L avg' : 'track km/L') + '</b><span>' + (F.avg ? F.proj[1].aed + ' / mo' : 'Log fill-up') + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>' +
       voiceBar('c') + '</div>';
@@ -316,7 +336,7 @@
       tripBanner() + setupBanner() +
       '<div class="mid">' +
       '<div class="navp"><div class="sb"><h2>Navigate</h2>' + ic('nav', 28, 'currentColor', 2.2) + '</div>' + searchBox('i', 'Search a place or address') +
-      '<div class="places">' + settings.places.map(function (p, i) { return placeBtn(p, i); }).join('') + '</div></div>' +
+      '<div class="places">' + settings.places.map(function (p, i) { return placeBtn(p, i); }).join('') + '</div>' + trafficAlert() + '</div>' +
       (FD.native && FD.status.calendar ? agendaCard() :
       '<div class="recent card"><div class="sb"><div style="font-weight:600;font-size:20px">Recent trips</div><span class="lab">' + fmt(weekKm()) + ' km this week</span></div>' +
       (recent || '<div class="empty">Your trips appear here after your first drive, with distance, time and average speed.</div>') + '</div>') + '</div>' +
@@ -479,11 +499,11 @@
     }
     return '<div class="form"><h3>Log a refill</h3><div class="fields">' +
       fld('date', 'Date', 'date') + fld('odo', 'Odometer (km)', 'number', last ? String(last.odo + 600) : 'e.g. 48210') +
-      fld('litres', 'Litres filled', 'number', '52.0') + fld('rate', 'Rate (AED / L)', 'number', fmt(currentPrice(), 2)) + '</div>' +
+      (byAmount() ? fld('amount', 'Amount paid (AED)', 'number', '220.00') : fld('litres', 'Litres filled', 'number', '52.0')) + '</div>' +
       '<div class="pv" data-preview>' + esc(previewText()) + '</div>' +
       (S.err ? '<span class="err">' + esc(S.err) + '</span>' : '') +
       '<button type="button" class="savebtn" data-a="save">Save refill</button>' +
-      '<span class="s12 mute">Fill the tank fully each time. Km driven and km/L are worked out from your odometer readings.</span></div>';
+      '<span class="s12 mute">Fill the tank fully each time. ' + (byAmount() ? 'Litres are worked out from the amount and that month\'s fuel price.' : 'Cost is worked out from that month\'s fuel price.') + ' Switch between litres and amount in Settings.</span></div>';
   }
   function history(F) {
     if (!F.rows.length) return '<div class="empty">No fill-ups yet. Your first entry sets the starting odometer reading; km/L appears from the second.</div>';
@@ -491,7 +511,7 @@
       var e = r.e;
       return '<div class="hrow"><span class="d">' + dayLabel(e.date) + '</span>' +
         '<div class="grow"><b>' + (r.km !== null ? '+' + fmt(r.km) + ' km · ' + fmt(r.eff, 1) + ' km/L' : 'Starting reading') + '</b>' +
-        '<span class="s12 mute">Odometer ' + fmt(e.odo) + ' · ' + fmt(e.litres, 1) + ' L · AED ' + fmt(e.litres * e.rate, 2) + '</span></div>' +
+        '<span class="s12 mute">Odometer ' + fmt(e.odo) + ' · ' + fmt(e.litres, 1) + ' L · AED ' + fmt(e.paid || e.litres * e.rate, 2) + '</span></div>' +
         '<button type="button" class="del" data-a="del" data-id="' + e.id + '" aria-label="Delete this refill">' + ic('x', 16, 'currentColor', 2.2) + '</button></div>';
     }).join('');
   }
@@ -533,15 +553,106 @@
       '<div class="row"><button type="button" class="btn amber" data-a="savekey">Save key</button><span class="s13 mute" id="keystatus">' + (settings.apiKey ? 'Key saved' : 'No key yet') + '</span></div></section>';
     return '<div class="st ' + L + '"><div class="fhd"><button type="button" class="backbtn" data-a="back" aria-label="Back">' + ic('back', 20, 'currentColor', 2.4) + '</button><h1>Settings</h1></div><div class="stbody">' +
       keySection +
+      (FD.native ? calendarSection() : '') +
       '<section class="sec"><h2>Saved places</h2><p>Shown on the home screen for one-tap navigation.</p>' + placeRows + '</section>' +
+      trafficSection() +
       '<section class="sec"><h2>Quick-dial contacts</h2><p>Tap Calls while driving to ring these numbers with one tap, or say "Call" and the name.</p>' + contactRows + '<button type="button" class="btn amber" data-a="savecontacts">Save contacts</button></section>' +
       '<section class="sec"><h2>Driving</h2>' + (FD.native ? '' : '<div class="toggle">Voice guidance<button type="button" data-a="voicetoggle" aria-pressed="' + settings.voice + '" aria-label="Voice guidance"></button></div>') +
       '<div class="toggle">Fuel price auto-update<button type="button" data-a="auto" aria-pressed="' + settings.auto + '" aria-label="Fuel price auto-update"></button></div>' +
+      '<label class="s13 mute" for="inputSel">When logging a refill, enter</label><select id="inputSel" class="inp" data-inputsel><option value="litres"' + (byAmount() ? '' : ' selected') + '>Litres filled</option><option value="amount"' + (byAmount() ? ' selected' : '') + '>Amount paid (AED)</option></select>' +
       '<label class="s13 mute" for="gradeSel">Fuel your car uses</label><select id="gradeSel" class="inp" data-gradesel>' + GRADES.map(function (g) { return '<option' + (g === settings.grade ? ' selected' : '') + '>' + g + '</option>'; }).join('') + '</select></section>' +
       '<section class="sec"><h2>Backup</h2><p>Your fill-ups, trips and settings are stored on this phone only. Export a backup file now and then, and import it after changing phones or clearing Chrome data.</p>' +
       '<div class="row" style="flex-wrap:wrap"><button type="button" class="btn" data-a="export">Export backup</button><label class="btn" for="importFile">Import backup</label><input id="importFile" type="file" accept="application/json,.json" hidden></div></section>' +
       '<section class="sec"><h2>About</h2><p>Fold Drive ' + (FD.native ? (FD.status.version || VERSION) + ' for Android' : VERSION) + ' · ' + trips.length + ' trips · ' + fuel.entries.length + ' fill-ups stored.</p></section>' +
       '</div></div>';
+  }
+
+  function calendarSection() {
+    var cals = FD.calendars || [], hidden = settings.hiddenCals || [];
+    if (!FD.status.calendar) return '';
+    var rows = cals.map(function (c) {
+      var on = hidden.indexOf(String(c.id)) < 0;
+      var src = /exchange|outlook|microsoft|office|eas/i.test(c.type + ' ' + c.account) ? 'Outlook / Exchange' : (/google/i.test(c.type) ? 'Google' : (/samsung|local/i.test(c.type) ? 'Phone' : c.type.split('.').pop()));
+      return '<div class="toggle"><span class="grow">' + esc(c.name) + '<span class="s12 mute" style="display:block">' + esc(src) + (c.account && c.account !== c.name ? ' · ' + esc(c.account) : '') + '</span></span>' +
+        '<button type="button" data-a="caltoggle" data-id="' + c.id + '" aria-pressed="' + on + '" aria-label="Show ' + esc(c.name) + '"></button></div>';
+    }).join('');
+    return '<section class="sec"><h2>Calendars</h2><p>Meetings from the calendars switched on here appear on the home screen.</p>' + (rows || '<div class="empty">No calendars found on this phone.</div>') +
+      '<p><b style="color:var(--fg)">Don\'t see Outlook?</b> Open the Outlook app → Settings → tap your account → turn on <b style="color:var(--fg)">Sync calendars</b>. Then come back here. Or add your work account in the phone\'s Settings → Accounts.</p></section>';
+  }
+
+  /* ---------- traffic (TomTom, optional) ---------- */
+  function ttRoute(from, to) {
+    var url = 'https://api.tomtom.com/routing/1/calculateRoute/' + from.lat + ',' + from.lng + ':' + to.lat + ',' + to.lng +
+      '/json?key=' + encodeURIComponent(settings.tomtomKey) + '&traffic=true&travelMode=car&routeType=fastest&sectionType=traffic&instructionsType=text&language=en-GB';
+    return fetch(url).then(function (r) {
+      if (r.status === 401 || r.status === 403) throw new Error('TomTom rejected the key. Check it in Settings.');
+      if (!r.ok) throw new Error('Traffic service error ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      var rt = j.routes && j.routes[0]; if (!rt) throw new Error('No route found');
+      var sm = rt.summary, ins = (rt.guidance && rt.guidance.instructions) || [];
+      function roadAt(idx) {
+        var name = '';
+        for (var i = 0; i < ins.length && ins[i].pointIndex <= idx; i++) {
+          var n = ins[i].street || (ins[i].roadNumbers || []).join(' / ');
+          if (n) name = n;
+        }
+        return name;
+      }
+      var jams = (rt.sections || []).filter(function (x) { return x.sectionType === 'TRAFFIC' && (x.delayInSeconds || 0) >= 60; }).map(function (x) {
+        return {
+          road: roadAt(x.startPointIndex) || 'On the way', delayMin: Math.round(x.delayInSeconds / 60),
+          kind: x.simpleCategory === 'ROAD_WORK' ? 'roadworks' : x.simpleCategory === 'ROAD_CLOSURE' ? 'road closed' : 'slow traffic'
+        };
+      }).sort(function (a, b) { return b.delayMin - a.delayMin; });
+      return { km: sm.lengthInMeters / 1000, mins: Math.round(sm.travelTimeInSeconds / 60), delayMin: Math.round((sm.trafficDelayInSeconds || 0) / 60), jams: jams, at: Date.now() };
+    });
+  }
+  FD.traffic = { route: ttRoute, hasKey: function () { return !!settings.tomtomKey; } };
+  function placeCoords(p) {
+    if (p.lat != null) return { lat: p.lat, lng: p.lng };
+    if (FD.native && p.query) {
+      var g = null; try { g = JSON.parse(window.Android.geocode(p.query)); } catch (e) { }
+      if (g && g.lat != null) { p.lat = g.lat; p.lng = g.lng; saveSettings(); return g; }
+    }
+    return null;
+  }
+  var lastHomeTraffic = 0;
+  function refreshHomeTraffic(force) {
+    if (!settings.tomtomKey || FD.nav.trip) return;
+    if (!force && Date.now() - lastHomeTraffic < 5 * 60000) return;
+    lastHomeTraffic = Date.now();
+    FD.nav.here().then(function (here) {
+      settings.places.forEach(function (p, i) {
+        var to = placeCoords(p); if (!to) return;
+        if (FD.nav.hav && FD.nav.hav(here, to) < 500) { S.traffic[i] = { here: true }; return; }
+        ttRoute(here, to).then(function (r) { S.traffic[i] = r; if (S.screen === 'home') softRender(); })
+          .catch(function (e) { S.traffic[i] = { error: e.message }; });
+      });
+    }).catch(function () { });
+  }
+  function softRender() { var a = document.activeElement; if (!(a && a.tagName === 'INPUT') && !S.modal) render(); }
+  function trafficFor(i) {
+    var r = S.traffic[i]; if (!r || r.error || r.here || r.mins == null) return '';
+    return r.mins + ' min' + (r.delayMin >= 2 ? ' · +' + r.delayMin : '');
+  }
+  function trafficAlert() {
+    var worst = null;
+    settings.places.forEach(function (p, i) {
+      var r = S.traffic[i]; if (!r || !r.jams || !r.jams.length) return;
+      var j = r.jams[0]; if (j.delayMin >= 3 && (!worst || j.delayMin > worst.j.delayMin)) worst = { j: j, p: p };
+    });
+    if (!worst) return '';
+    return '<div class="alert">' + ic('clock', 18, 'currentColor', 2.2) + '<span class="grow"><b>' + esc(worst.j.road) + ' +' + worst.j.delayMin + ' min</b> · ' + worst.j.kind + ' on the way to ' + esc(worst.p.name) + '</span></div>';
+  }
+  FD.trafficAlertsHTML = function (t) {
+    if (!t || !t.jams || !t.jams.length) return '';
+    return t.jams.slice(0, 2).map(function (j) { return '<div class="alert">' + ic('clock', 18, 'currentColor', 2.2) + '<span class="grow"><b>' + esc(j.road) + ' +' + j.delayMin + ' min</b> · ' + j.kind + '</span></div>'; }).join('');
+  };
+  function trafficSection() {
+    return '<section class="sec"><h2>Traffic alerts</h2><p>Optional. Shows delays by road name (for example "Sheikh Zayed Rd +6 min") for your saved places and the trip you are on, and exact km left. Needs a free TomTom key: sign up at developer.tomtom.com (no card needed), open Keys, and copy your key here.</p>' +
+      '<input class="inp" id="ttkey" placeholder="TomTom API key" autocomplete="off" spellcheck="false" value="' + esc(settings.tomtomKey || '') + '">' +
+      '<div class="row"><button type="button" class="btn amber" data-a="savett">Save key</button><span class="s13 mute" id="ttstatus">' + (settings.tomtomKey ? 'Key saved' : 'Not set up') + '</span></div></section>';
   }
 
   /* ---------- modals ---------- */
@@ -556,6 +667,20 @@
         (FD.native ? '<button type="button" class="mrow" data-a="open" data-app="dialer">' + ic('phone', 22, '#9AA6B4') + '<span>Open phone dialer' + ((FD.counts || {}).missed ? '<small>' + FD.counts.missed + ' missed calls</small>' : '') + '</span></button>'
           : '<a class="mrow" href="tel:">' + ic('phone', 22, '#9AA6B4') + '<span>Open phone dialer</span></a>') +
         '<button type="button" class="btn" data-a="close">Close</button></div></div>';
+    }
+    if (S.modal === 'chats' && S.chatApp) {
+      var app = S.chatApp, name = app === 'business' ? 'WhatsApp Business' : 'WhatsApp';
+      var list = ((FD.chats || {})[app] || []).slice().sort(function (a, b) { return b.time - a.time; });
+      var body;
+      if (!FD.status.notif) body = '<div class="empty">Allow Notification access in Settings so Fold Drive can show unread messages.</div>';
+      else if (!list.length) body = '<div class="empty">No unread messages.</div>';
+      else body = list.map(function (c) {
+        var lines = (c.lines || []).slice(-3).map(function (l) { return '<span class="s13 mute ell" style="display:block">' + (l.from && l.from !== c.title ? '<b style="color:var(--soft)">' + esc(l.from) + ':</b> ' : '') + esc(l.text) + '</span>'; }).join('');
+        return '<button type="button" class="mrow" style="align-items:flex-start" data-a="openchat" data-key="' + esc(c.key) + '" data-app="' + app + '">' +
+          '<span class="grow" style="text-align:left"><span class="sb"><b class="ell" style="font-size:16px">' + esc(c.title) + '</b><span class="badge" style="position:static">' + c.count + '</span></span>' + lines + '</span></button>';
+      }).join('');
+      return '<div class="modal" data-a="close"><div class="mbox" role="dialog" aria-label="' + name + '"><h2>' + name + '</h2>' + body +
+        '<div class="row"><button type="button" class="btn amber" data-a="open" data-app="' + app + '" style="flex:1">Open ' + name + '</button><button type="button" class="btn" data-a="close">Close</button></div></div></div>';
     }
     if (S.modal === 'summary' && S.summary) {
       var t = S.summary;
@@ -635,6 +760,7 @@
     show('nav');
   }
   FD.startNav = startNav;
+  FD.refreshHomeTraffic = refreshHomeTraffic;
   FD.back = function () {
     if (S.modal) { S.modal = null; S.picker = null; render(); return true; }
     if (S.screen === 'home') return false;
@@ -760,6 +886,21 @@
       case 'open': window.Android.open(el.getAttribute('data-app')); if (S.modal) { S.modal = null; render(); } break;
       case 'dial': window.Android.call(el.getAttribute('data-n')); S.modal = null; render(); break;
       case 'perm': window.Android.request(el.getAttribute('data-p')); break;
+      case 'chats': if (FD.refreshNative) FD.refreshNative(); S.chatApp = el.getAttribute('data-app'); S.modal = 'chats'; render(); break;
+      case 'openchat': window.Android.openChat(el.getAttribute('data-key'), el.getAttribute('data-app')); S.modal = null; render(); break;
+      case 'caltoggle':
+        var cid = el.getAttribute('data-id'), hc = settings.hiddenCals || [];
+        settings.hiddenCals = hc.indexOf(cid) >= 0 ? hc.filter(function (x) { return x !== cid; }) : hc.concat([cid]);
+        saveSettings(); render(); break;
+      case 'savett':
+        settings.tomtomKey = (document.getElementById('ttkey').value || '').trim(); saveSettings();
+        var tst = document.getElementById('ttstatus');
+        if (!settings.tomtomKey) { tst.textContent = 'Not set up'; break; }
+        tst.textContent = 'Testing…';
+        ttRoute({ lat: 25.1972, lng: 55.2744 }, { lat: 25.2131, lng: 55.2797 })
+          .then(function (r) { tst.textContent = 'Key works · Dubai Mall to DIFC ' + r.mins + ' min now'; lastHomeTraffic = 0; refreshHomeTraffic(true); })
+          .catch(function (e) { tst.textContent = e.message; });
+        break;
       case 'pref': FD.prefToggle(el.getAttribute('data-k')); break;
       case 'openmaps': FD.nav.recenter(); break;
       case 'evnav':
@@ -783,6 +924,7 @@
     var tg = ev.target;
     if (tg.hasAttribute('data-price')) { settings.price = tg.value; saveSettings(); render(); }
     else if (tg.hasAttribute('data-gradesel')) { settings.grade = tg.value; saveSettings(); render(); }
+    else if (tg.hasAttribute('data-inputsel')) { settings.fuelInput = tg.value; saveSettings(); render(); toast(tg.value === 'amount' ? 'Refills: enter the amount paid' : 'Refills: enter litres filled'); }
     else if (tg.hasAttribute('data-pname')) { settings.places[+tg.getAttribute('data-pname')].name = tg.value.trim() || 'Place'; saveSettings(); }
     else if (tg.id === 'importFile' && tg.files && tg.files[0]) importData(tg.files[0]);
   });
@@ -795,14 +937,14 @@
   });
 
   function saveRefill() {
-    var fm = S.form, odo = parseFloat(fm.odo), litres = parseFloat(fm.litres), rate = parseFloat(fm.rate || currentPrice());
-    if (!fm.date || !(odo > 0) || !(litres > 0) || !(rate > 0)) { S.err = 'Fill in the date, odometer and litres.'; render(); return; }
+    var fm = S.form, odo = parseFloat(fm.odo), f = formFill(), litres = f.litres, rate = f.rate;
+    if (!fm.date || !(odo > 0) || !(litres > 0) || !(rate > 0)) { S.err = 'Fill in the date, odometer and ' + (byAmount() ? 'amount paid.' : 'litres.'); render(); return; }
     var nb = neighbours(fm.date);
     if (nb.prev && odo <= nb.prev.odo) { S.err = 'Odometer must be more than ' + fmt(nb.prev.odo) + ' km, the reading on ' + dayLabel(nb.prev.date) + '.'; render(); return; }
     if (nb.next && odo >= nb.next.odo) { S.err = 'Odometer must be less than ' + fmt(nb.next.odo) + ' km, the reading on ' + dayLabel(nb.next.date) + '.'; render(); return; }
-    fuel.entries.push({ id: Date.now(), date: fm.date, odo: odo, litres: litres, rate: rate });
+    fuel.entries.push({ id: Date.now(), date: fm.date, odo: odo, litres: Math.round(litres * 100) / 100, rate: rate, paid: byAmount() ? f.amount : null });
     saveFuel();
-    S.form = { date: isoDay(), odo: '', litres: '', rate: '' }; S.err = ''; S.showForm = false;
+    S.form = { date: isoDay(), odo: '', litres: '', amount: '', rate: '' }; S.err = ''; S.showForm = false;
     render();
     toast(nb.prev ? 'Refill saved · ' + fmt(odo - nb.prev.odo) + ' km · ' + fmt((odo - nb.prev.odo) / litres, 1) + ' km/L' : 'Starting odometer reading saved');
   }
@@ -848,7 +990,7 @@
   });
   setInterval(function () {
     var a = document.activeElement;
-    if (S.screen === 'home' && !S.modal && !(a && a.tagName === 'INPUT')) { if (FD.native) FD.refreshNative(); render(); }
+    if (S.screen === 'home' && !S.modal && !(a && a.tagName === 'INPUT')) { if (FD.native) FD.refreshNative(); refreshHomeTraffic(false); render(); }
   }, 30000);
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'visible' && Date.now() - load('fd-prices-checked', 0) > 6 * 3600000) fetchPrices(false);
@@ -859,6 +1001,7 @@
     if (qs === 'fuel' || qs === 'settings') S.screen = qs;
     render();
     fetchPrices(false);
+    setTimeout(function () { refreshHomeTraffic(true); }, 1500);
     if ('serviceWorker' in navigator && !window.Android) navigator.serviceWorker.register('sw.js').catch(function () { });
   });
 })();

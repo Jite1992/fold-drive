@@ -16,11 +16,15 @@ class Bridge(private val a: MainActivity) {
         val d = try { JSONObject(destJson) } catch (_: Exception) { JSONObject() }
         if (d.length() == 0) a.openApp("maps") else a.launchMaps(d)
     }
-    @JavascriptInterface fun endTrip(): String {
+    @JavascriptInterface fun endTrip(exitMaps: Boolean): String {
         val s = TripService.state?.toString() ?: "null"
-        ui { a.stopTrip(); a.keepScreenOn(false) }
+        ui { a.stopTrip(exitMaps); a.keepScreenOn(false) }
         return s
     }
+    @JavascriptInterface fun chats(): String = NavBus.chats.toString()
+    @JavascriptInterface fun openChat(key: String, app: String) = ui { a.openChat(key, app) }
+    @JavascriptInterface fun calendars(): String = a.readCalendars()
+    @JavascriptInterface fun geocode(q: String): String = a.geocode(q)
     @JavascriptInterface fun trip(): String = TripService.state?.toString() ?: "null"
     @JavascriptInterface fun nav(): String = NavBus.nav?.toString() ?: "null"
     @JavascriptInterface fun counts(): String = NavBus.counts.toString()
