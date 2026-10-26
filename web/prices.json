@@ -1,0 +1,17 @@
+{
+  "updated": "2026-10-01",
+  "month": "October 2026",
+  "source": "UAE Fuel Price Committee, as reported by Khaleej Times",
+  "grades": {
+    "Super 98": 4.40,
+    "Special 95": 4.28,
+    "E-Plus 91": 4.21,
+    "Diesel": 4.80
+  },
+  "previous": {
+    "Super 98": 3.80,
+    "Special 95": 3.69,
+    "E-Plus 91": 3.61,
+    "Diesel": 4.30
+  }
+}
