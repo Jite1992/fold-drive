@@ -38,7 +38,8 @@
     var ex = n.extras || {}, extraText = [];
     Object.keys(ex).forEach(function (k) {
       var v = ex[k];
-      if (typeof v === 'string' && v.charAt(0) !== '<' && !/^android\.(title|text|subText|bigText|infoText|summaryText|template)$/.test(k)) extraText.push(v);
+      if (typeof v === 'string' && v.charAt(0) !== '<' && !/^android\.(title|text|subText|bigText|infoText|summaryText|template)$/.test(k) &&
+          !/^androidx?\.[\w.$]+$/.test(v) && !/chipBgColor|style|actionType/i.test(k)) extraText.push(v);
     });
     var fields = [n.title, n.titleBig, n.text, n.sub, n.info, n.summary, n.big].concat(n.lines || [], extraText).filter(Boolean)
       .filter(function (f, i, arr) { return arr.indexOf(f) === i; });
@@ -80,7 +81,16 @@
         out.leftFromEta = true;
       }
     }
-    var km = summ.match(/(\d+(?:[.,]\d+)?)\s*km\b/i);
+    // Google Maps' progress bar: metres driven (progress) out of the whole route (progressMax)
+    var pg = ex['android.progress'], pgMax = ex['android.progressMax'];
+    if (typeof pg === 'number' && typeof pgMax === 'number' && pgMax >= 100 && pgMax <= 3000000 && pg >= 0 && pg <= pgMax && !ex['android.progressIndeterminate']) {
+      out.leftKm = (pgMax - pg) / 1000;
+      out.routeKm = pgMax / 1000;
+      out.fromProgress = true;
+    }
+    var road = ex['ongoingActivityNoti.secondaryInfo'] || ex['ongoingActivityNoti.nowbarSecondaryInfo'];
+    if (road && !out.then) out.road = road;
+    var km = out.fromProgress ? null : summ.match(/(\d+(?:[.,]\d+)?)\s*km\b/i);
     if (km) out.leftKm = parseFloat(km[1].replace(',', '.'));
     else { var mm = summ.match(/(\d+)\s*m\b/); if (mm) out.leftKm = parseInt(mm[1], 10) / 1000; }
     return out;
@@ -204,14 +214,14 @@
     v.totalU = total >= 60 ? ' h:min' : ' min';
     v.rem = remKm != null ? (exactKm != null ? '' : '≈') + fmt(remKm, 1) : '–';
     v.eta = mp && mp.eta ? mp.eta : (left != null ? U.hhmm(new Date(Date.now() + left * 60000)) : '--:--');
-    v.prog = remKm != null && km + remKm > 0 ? Math.round(100 * km / (km + remKm)) : 0;
+    v.prog = mp && mp.routeKm ? Math.round(100 * (1 - mp.leftKm / mp.routeKm)) : (remKm != null && km + remKm > 0 ? Math.round(100 * km / (km + remKm)) : 0);
     v.sub = mp ? (mp.summary || 'Following Google Maps') : (t.dest ? 'Waiting for Google Maps' : 'Recording your drive');
 
     var big = '', line = '', small = '', cls = 'turn', iconHTML;
     if (mp && (mp.instr || mp.turnM != null)) {
       big = mp.turnM != null ? distLabel(mp.turnM) : '';
       line = mp.instr || 'Follow Google Maps';
-      small = mp.then || '';
+      small = mp.then || (mp.road && (mp.instr || '').indexOf(mp.road) < 0 ? mp.road : '');
       iconHTML = mp.icon ? '<img src="' + mp.icon + '" alt="" width="52" height="52" style="flex-shrink:0;filter:brightness(0) invert(1)">' : ic('up', 48, 'currentColor', 2.6);
     } else if (t.mapsEnded) {
       cls += ' wait'; iconHTML = ic('flag', 44, 'currentColor', 2.6); big = 'Arrived?'; line = 'Google Maps finished navigating'; small = 'Tap End to save the trip';
@@ -267,7 +277,7 @@
       '<div class="toggle">Floating stats bubble over Google Maps<button type="button" data-a="pref" data-k="overlay" aria-pressed="' + !!s.overlayOn + '"></button></div>' +
       '<p>Last directions read from Google Maps:</p><div class="empty" style="font-size:13px;word-break:break-word">' +
       (d ? U.esc(d.raw) + '<br><br>Turn: ' + (d.turnM != null ? Math.round(d.turnM) + ' m' : '–') + ' · ' + U.esc(d.instr || '–') +
-        '<br>Time left: ' + (d.leftMin != null ? d.leftMin + ' min' + (d.leftFromEta ? ' (from arrival time)' : '') : '–') + ' · Km left: ' + (d.leftKm != null ? d.leftKm : '–') + ' · ETA: ' + U.esc(d.eta || '–') +
+        '<br>Time left: ' + (d.leftMin != null ? d.leftMin + ' min' + (d.leftFromEta ? ' (from arrival time)' : '') : '–') + ' · Km left: ' + (d.leftKm != null ? U.fmt(d.leftKm, 1) + (d.fromProgress ? ' of ' + U.fmt(d.routeKm, 1) + ' (from Maps progress)' : '') : '–') + ' · ETA: ' + U.esc(d.eta || '–') +
         '<br><br><b>All fields:</b><br>' + Object.keys(d.extras || {}).map(function (k) { return U.esc(k.replace(/^android\./, '')) + ' = ' + U.esc(JSON.stringify(d.extras[k])); }).join('<br>')
         : 'Nothing yet. Start navigation in Google Maps, then come back here.') +
       '</div><p>If these numbers look wrong, send a screenshot of this box to Claude so the reading can be adjusted.</p></section>';

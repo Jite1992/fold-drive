@@ -26,6 +26,12 @@ object NavBus {
         val keys = listOf("sub", "info", "summary", "big", "text")
         val summary = keys.map { n.optString(it) }
             .firstOrNull { it.isNotBlank() && Regex("ETA|arriv|\\bmin\\b|\\bhr\\b", RegexOption.IGNORE_CASE).containsMatchIn(it) }
-        return listOf(title, summary).filter { !it.isNullOrBlank() }.joinToString(" · ").ifBlank { null }
+        val ex = n.optJSONObject("extras")
+        var left: String? = null
+        if (ex != null && ex.has("android.progress") && ex.has("android.progressMax")) {
+            val p = ex.optDouble("android.progress"); val max = ex.optDouble("android.progressMax")
+            if (max in 100.0..3_000_000.0 && p in 0.0..max) left = String.format(java.util.Locale.US, "%.1f km left", (max - p) / 1000.0)
+        }
+        return listOf(title, summary, left).filter { !it.isNullOrBlank() }.joinToString(" · ").ifBlank { null }
     }
 }
