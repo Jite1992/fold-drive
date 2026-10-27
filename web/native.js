@@ -130,6 +130,7 @@
       var near = s.straight == null || s.straight < 300000;   // a lookup 300+ km away is the wrong place
       t.straight = s.straight != null && s.straight < 300000 ? s.straight : null;
       if (s.hasPos) t.pos = { lat: s.lat, lng: s.lng };
+      if (s.heading != null) t.heading = s.heading;
       if (t.dest && s.dest && s.dest.lat != null && (near || !s.hasPos)) { t.dest.lat = s.dest.lat; t.dest.lng = s.dest.lng; }
       else if (t.dest && s.dest && s.dest.lat != null && s.hasPos && !near) { t.dest.lat = null; t.dest.lng = null; }
     }
@@ -147,53 +148,129 @@
     FD.onTrip('update');
   }
 
-  /* ---------- built-in map (free: OpenStreetMap/CARTO tiles, OSRM route line) ---------- */
-  var lmap = null, mapDiv = null, carMk = null, destMk = null, routeLn = null, follow = true, lastRouteAt = 0, routeFor = '';
+  /* ---------- built-in map: Google Maps with live traffic if a key is saved, otherwise a free map ---------- */
+  var mapDiv = null, engine = null, follow = true, lastRouteAt = 0, routeFor = '', routeCoords = [];
+  var lmap = null, carMk = null, destMk = null, routeLn = null;          // free map (Leaflet)
+  var gmap = null, gCar = null, gDest = null, gRoute = null, gFailed = false; // Google map
+  var GDARK = [
+    { elementType: 'geometry', stylers: [{ color: '#111821' }] },
+    { elementType: 'labels.text.fill', stylers: [{ color: '#8A96A6' }] },
+    { elementType: 'labels.text.stroke', stylers: [{ color: '#0D1117' }] },
+    { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#151E29' }] },
+    { featureType: 'poi', stylers: [{ visibility: 'off' }] },
+    { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#2A3542' }] },
+    { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#3A4A60' }] },
+    { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#B7C2D0' }] },
+    { featureType: 'transit', stylers: [{ visibility: 'off' }] },
+    { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0A2230' }] }
+  ];
+  function googleKey() { return (FD.settings && FD.settings.apiKey) || ''; }
+  function loadGoogle() {
+    return new Promise(function (res, rej) {
+      if (window.google && google.maps && google.maps.Map) { res(); return; }
+      window.__fdG = function () { res(); };
+      window.gm_authFailure = function () {
+        gFailed = true;
+        FD.toast('Google rejected the Maps key. Showing the free map instead.');
+        startLeaflet();
+      };
+      var sc = document.createElement('script');
+      sc.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(googleKey()) + '&v=weekly&callback=__fdG';
+      sc.async = true;
+      sc.onerror = function () { rej(new Error('Could not load Google Maps')); };
+      document.head.appendChild(sc);
+    });
+  }
+  function freshDiv() {
+    var old = mapDiv;
+    mapDiv = document.createElement('div'); mapDiv.className = 'gmap';
+    if (old && old.parentNode) old.parentNode.replaceChild(mapDiv, old);
+  }
+  function startGoogle() {
+    engine = 'google';
+    loadGoogle().then(function () {
+      if (engine !== 'google' || gFailed) return;
+      gmap = new google.maps.Map(mapDiv, {
+        center: { lat: 25.2048, lng: 55.2708 }, zoom: 15, disableDefaultUI: true, gestureHandling: 'greedy',
+        clickableIcons: false, styles: GDARK, backgroundColor: '#111821'
+      });
+      new google.maps.TrafficLayer().setMap(gmap);
+      gmap.addListener('dragstart', function () { follow = false; });
+      gRoute = new google.maps.Polyline({ map: gmap, strokeColor: '#34C3B5', strokeOpacity: 0.9, strokeWeight: 6, zIndex: 2 });
+      gCar = new google.maps.Marker({ zIndex: 10, clickable: false });
+      gDest = new google.maps.Marker({ zIndex: 5, clickable: false });
+      if (routeCoords.length) gRoute.setPath(routeCoords.map(function (p) { return { lat: p[0], lng: p[1] }; }));
+      updateMap();
+    }).catch(function () { startLeaflet(); });
+  }
+  function startLeaflet() {
+    if (engine === 'leaflet' && lmap) return;
+    engine = 'leaflet'; gmap = null;
+    if (!window.L) return;
+    freshDiv();
+    lmap = L.map(mapDiv, { zoomControl: false, attributionControl: true }).setView([25.2048, 55.2708], 15);
+    lmap.attributionControl.setPrefix(false);
+    // Free maps, no key: OpenStreetMap first; switch to Esri's street map if OSM tiles fail to load.
+    var sources = [
+      { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors' },
+      { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles © Esri' }
+    ];
+    var srcIdx = 0, loadedOk = false, errors = 0, layer = null;
+    var useSource = function (i) {
+      if (layer) lmap.removeLayer(layer);
+      errors = 0; loadedOk = false; srcIdx = i;
+      layer = L.tileLayer(sources[i].url, { maxZoom: 19, attribution: sources[i].attribution });
+      layer.on('tileload', function () { loadedOk = true; });
+      layer.on('tileerror', function () {
+        errors++;
+        if (!loadedOk && errors >= 4 && srcIdx < sources.length - 1) useSource(srcIdx + 1);
+      });
+      layer.addTo(lmap);
+    };
+    useSource(0);
+    lmap.on('dragstart', function () { follow = false; });
+    routeLn = L.polyline(routeCoords, { color: '#34C3B5', weight: 6, opacity: 0.9 }).addTo(lmap);
+    carMk = L.circleMarker([25.2, 55.27], { radius: 9, color: '#1A1305', weight: 3, fillColor: '#F5A524', fillOpacity: 1 });
+    destMk = L.circleMarker([25.2, 55.27], { radius: 8, color: '#FFFFFF', weight: 2, fillColor: '#34C3B5', fillOpacity: 1 });
+    setTimeout(function () { lmap.invalidateSize(); updateMap(); }, 60);
+  }
   N.attach = function (slot) {
-    if (!slot || !window.L) return;
+    if (!slot) return;
     if (!mapDiv) { mapDiv = document.createElement('div'); mapDiv.className = 'gmap'; }
     slot.insertBefore(mapDiv, slot.firstChild);
-    if (!lmap) {
-      lmap = L.map(mapDiv, { zoomControl: false, attributionControl: true }).setView([25.2048, 55.2708], 15);
-      lmap.attributionControl.setPrefix(false);
-      // Free maps, no key: OpenStreetMap first; switch to Esri's street map if OSM tiles fail to load.
-      var sources = [
-        { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors', maxZoom: 19 },
-        { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles © Esri', maxZoom: 19 }
-      ];
-      var srcIdx = 0, loadedOk = false, errors = 0, layer = null;
-      var useSource = function (i) {
-        if (layer) lmap.removeLayer(layer);
-        errors = 0; loadedOk = false; srcIdx = i;
-        layer = L.tileLayer(sources[i].url, { maxZoom: sources[i].maxZoom, attribution: sources[i].attribution, crossOrigin: false });
-        layer.on('tileload', function () { loadedOk = true; });
-        layer.on('tileerror', function () {
-          errors++;
-          if (!loadedOk && errors >= 4 && srcIdx < sources.length - 1) useSource(srcIdx + 1);
-        });
-        layer.addTo(lmap);
-      };
-      useSource(0);
-      lmap.on('dragstart', function () { follow = false; });
-      routeLn = L.polyline([], { color: '#34C3B5', weight: 6, opacity: 0.9 }).addTo(lmap);
-      carMk = L.circleMarker([25.2, 55.27], { radius: 9, color: '#1A1305', weight: 3, fillColor: '#F5A524', fillOpacity: 1 });
-      destMk = L.circleMarker([25.2, 55.27], { radius: 8, color: '#FFFFFF', weight: 2, fillColor: '#34C3B5', fillOpacity: 1 });
-    }
-    setTimeout(function () { lmap.invalidateSize(); updateMap(); }, 60);
+    if (!engine) { if (googleKey() && !gFailed) startGoogle(); else startLeaflet(); }
+    else if (engine === 'leaflet' && lmap) setTimeout(function () { lmap.invalidateSize(); updateMap(); }, 60);
+    else updateMap();
+  };
+  /* Called after the key is saved or removed in Settings. */
+  N.resetMap = function () {
+    engine = null; gFailed = false; gmap = null; lmap = null;
+    if (mapDiv) freshDiv();
   };
   N.follow = function () { follow = true; updateMap(); };
+  function carIcon(heading) {
+    return { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 6, rotation: heading || 0, fillColor: '#F5A524', fillOpacity: 1, strokeColor: '#1A1305', strokeWeight: 2 };
+  }
   function updateMap() {
-    var t = N.trip; if (!lmap || !t) return;
-    if (t.pos) {
-      carMk.setLatLng([t.pos.lat, t.pos.lng]);
-      if (!lmap.hasLayer(carMk)) carMk.addTo(lmap);
-      if (follow) lmap.setView([t.pos.lat, t.pos.lng], Math.max(lmap.getZoom(), 14), { animate: true });
+    var t = N.trip; if (!t) return;
+    var hasDest = t.dest && t.dest.lat != null;
+    if (engine === 'google' && gmap) {
+      if (t.pos) {
+        gCar.setPosition(t.pos); gCar.setIcon(carIcon(t.heading)); if (!gCar.getMap()) gCar.setMap(gmap);
+        if (follow) { gmap.panTo(t.pos); if (gmap.getZoom() < 13) gmap.setZoom(15); }
+      }
+      if (hasDest) { gDest.setPosition({ lat: t.dest.lat, lng: t.dest.lng }); if (!gDest.getMap()) gDest.setMap(gmap); }
+    } else if (engine === 'leaflet' && lmap) {
+      if (t.pos) {
+        carMk.setLatLng([t.pos.lat, t.pos.lng]);
+        if (!lmap.hasLayer(carMk)) carMk.addTo(lmap);
+        if (follow) lmap.setView([t.pos.lat, t.pos.lng], Math.max(lmap.getZoom(), 14), { animate: true });
+      }
+      if (hasDest) { destMk.setLatLng([t.dest.lat, t.dest.lng]); if (!lmap.hasLayer(destMk)) destMk.addTo(lmap); }
     }
-    if (t.dest && t.dest.lat != null) {
-      destMk.setLatLng([t.dest.lat, t.dest.lng]);
-      if (!lmap.hasLayer(destMk)) destMk.addTo(lmap);
+    if (hasDest && t.pos) {
       var key = t.dest.lat + ',' + t.dest.lng;
-      if (t.pos && (Date.now() - lastRouteAt > 90000 || routeFor !== key)) fetchRoute(t, key);
+      if (Date.now() - lastRouteAt > 90000 || routeFor !== key) fetchRoute(t, key);
     }
   }
   function fetchRoute(t, key) {
@@ -202,15 +279,44 @@
       .then(function (r) { return r.json(); })
       .then(function (j) {
         var c = j.routes && j.routes[0] && j.routes[0].geometry && j.routes[0].geometry.coordinates;
-        if (c && N.trip === t) routeLn.setLatLngs(c.map(function (p) { return [p[1], p[0]]; }));
+        if (!c || N.trip !== t) return;
+        routeCoords = c.map(function (p) { return [p[1], p[0]]; });
+        if (engine === 'google' && gRoute) gRoute.setPath(routeCoords.map(function (p) { return { lat: p[0], lng: p[1] }; }));
+        if (engine === 'leaflet' && routeLn) routeLn.setLatLngs(routeCoords);
       }).catch(function () { });
   }
   function clearMap() {
-    if (!lmap) return;
-    routeLn.setLatLngs([]);
-    if (lmap.hasLayer(destMk)) lmap.removeLayer(destMk);
-    routeFor = ''; follow = true;
+    routeCoords = []; routeFor = ''; follow = true;
+    if (gRoute) gRoute.setPath([]);
+    if (gDest) gDest.setMap(null);
+    if (routeLn) routeLn.setLatLngs([]);
+    if (lmap && destMk && lmap.hasLayer(destMk)) lmap.removeLayer(destMk);
   }
+
+  /* ---------- Settings: Google Maps key ---------- */
+  FD.googleKeySection = function () {
+    var k = googleKey();
+    return '<section class="sec"><h2>Google map</h2><p>Optional. With a Google Maps key, the map under the arrival time is a Google map with live traffic colours. Without one, a free map is shown. The key is stored on this phone only.</p>' +
+      '<input class="inp" id="gkey" placeholder="AIza…" autocomplete="off" spellcheck="false" value="' + U.esc(k) + '">' +
+      '<div class="row"><button type="button" class="btn amber" data-a="savegkey">Save key</button><span class="s13 mute" id="gkeystatus">' + (k ? (gFailed ? 'Google rejected this key' : 'Key saved') : 'Using the free map') + '</span></div></section>';
+  };
+  FD.saveGoogleKey = function () {
+    var v = (document.getElementById('gkey').value || '').trim();
+    var had = googleKey();
+    FD.settings.apiKey = v;
+    try { localStorage.setItem('fd-settings', JSON.stringify(FD.settings)); } catch (e) { }
+    if (had && had !== v && window.google && google.maps) {
+      FD.toast('Key saved · restarting the map'); setTimeout(function () { location.reload(); }, 700); return;
+    }
+    N.resetMap();
+    var st = document.getElementById('gkeystatus');
+    if (!v) { st.textContent = 'Using the free map'; FD.toast('Google key removed'); return; }
+    st.textContent = 'Testing…';
+    gFailed = false;
+    loadGoogle().then(function () {
+      setTimeout(function () { st.textContent = gFailed ? 'Google rejected this key' : 'Key works · Google map with traffic is on'; }, 1500);
+    }).catch(function () { st.textContent = 'Could not reach Google. Check the internet connection.'; });
+  };
   N.recenter = function () { A.openMaps(JSON.stringify(N.trip && N.trip.dest || {})); };
   N.upcoming = function () { return null; };
   N.mapMessage = function () { return ''; };

@@ -547,7 +547,7 @@
     var contactRows = settings.contacts.map(function (c, i) {
       return '<div class="prow"><input class="inp" data-cname="' + i + '" placeholder="Name" value="' + esc(c.name) + '" aria-label="Contact name"><input class="inp" type="tel" data-cnum="' + i + '" placeholder="+971 50 123 4567" value="' + esc(c.number) + '" aria-label="Phone number"></div>';
     }).join('');
-    var keySection = FD.native ? FD.nativeSettings() :
+    var keySection = FD.native ? FD.nativeSettings() + FD.googleKeySection() :
       '<section class="sec"><h2>Google Maps key</h2><p>Needed for the map, place search and live-traffic routes. Paste the key from your Google Cloud project (see the install guide).</p>' +
       '<input class="inp" id="apikey" placeholder="AIza…" autocomplete="off" spellcheck="false" value="' + esc(settings.apiKey) + '">' +
       '<div class="row"><button type="button" class="btn amber" data-a="savekey">Save key</button><span class="s13 mute" id="keystatus">' + (settings.apiKey ? 'Key saved' : 'No key yet') + '</span></div></section>';
@@ -903,6 +903,7 @@
         break;
       case 'pref': FD.prefToggle(el.getAttribute('data-k')); break;
       case 'openmaps': FD.nav.recenter(); break;
+      case 'savegkey': FD.saveGoogleKey(); break;
       case 'mapfollow': if (typeof FD.nav.follow === 'function') FD.nav.follow(); break;
       case 'evnav':
         var ev = (FD.events || [])[+el.getAttribute('data-i')];
