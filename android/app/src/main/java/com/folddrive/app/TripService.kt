@@ -74,7 +74,7 @@ class TripService : Service(), LocationListener {
             try {
                 val g = Geocoder(ctx, Locale.ENGLISH)
                 val inUae = geocode(g, q, true)
-                val r = inUae ?: geocode(g, q, false)
+                val r = inUae
                 if (r != null && forDest === dest) {
                     handler.post { dest.put("lat", r.latitude); dest.put("lng", r.longitude); dest.put("geocoded", true) }
                 }

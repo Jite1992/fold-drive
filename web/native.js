@@ -113,6 +113,7 @@
     var s = J(A.endTrip(true));
     stopPoll();
     var t = N.trip; N.trip = null;
+    clearMap();
     if (!t) return null;
     if (s) { t.distance = s.distance; t.top = s.top; t.startedAt = s.startedAt || t.startedAt; }
     t.endedAt = Date.now();
@@ -125,9 +126,12 @@
     var s = J(A.trip());
     if (s && s.active) {
       t.distance = s.distance; t.speed = s.speed; t.top = s.top; t.startedAt = s.startedAt;
-      t.hasPos = s.hasPos; t.straight = s.straight; t.gps = s.gps;
+      t.hasPos = s.hasPos; t.gps = s.gps;
+      var near = s.straight == null || s.straight < 300000;   // a lookup 300+ km away is the wrong place
+      t.straight = s.straight != null && s.straight < 300000 ? s.straight : null;
       if (s.hasPos) t.pos = { lat: s.lat, lng: s.lng };
-      if (t.dest && s.dest && s.dest.lat != null) { t.dest.lat = s.dest.lat; t.dest.lng = s.dest.lng; }
+      if (t.dest && s.dest && s.dest.lat != null && (near || !s.hasPos)) { t.dest.lat = s.dest.lat; t.dest.lng = s.dest.lng; }
+      else if (t.dest && s.dest && s.dest.lat != null && s.hasPos && !near) { t.dest.lat = null; t.dest.lng = null; }
     }
     // live traffic on the route (optional TomTom key): every 2 minutes
     if (FD.traffic && FD.traffic.hasKey() && t.dest && t.dest.lat != null && t.pos && !t.ttBusy && (!t.ttAt || Date.now() - t.ttAt > 120000)) {
@@ -139,9 +143,59 @@
     var n = J(A.nav());
     t.maps = (n && n.active && n.time >= t.startedAt - 120000) ? parseMaps(n) : null;
     if (n && !n.active && n.endedAt && n.endedAt > t.startedAt && t.dest) t.mapsEnded = true;
+    updateMap();
     FD.onTrip('update');
   }
-  N.attach = function () { };
+
+  /* ---------- built-in map (free: OpenStreetMap/CARTO tiles, OSRM route line) ---------- */
+  var lmap = null, mapDiv = null, carMk = null, destMk = null, routeLn = null, follow = true, lastRouteAt = 0, routeFor = '';
+  N.attach = function (slot) {
+    if (!slot || !window.L) return;
+    if (!mapDiv) { mapDiv = document.createElement('div'); mapDiv.className = 'gmap'; }
+    slot.insertBefore(mapDiv, slot.firstChild);
+    if (!lmap) {
+      lmap = L.map(mapDiv, { zoomControl: false, attributionControl: true }).setView([25.2048, 55.2708], 15);
+      lmap.attributionControl.setPrefix(false);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd', maxZoom: 19, attribution: '© OpenStreetMap © CARTO'
+      }).addTo(lmap);
+      lmap.on('dragstart', function () { follow = false; });
+      routeLn = L.polyline([], { color: '#34C3B5', weight: 6, opacity: 0.9 }).addTo(lmap);
+      carMk = L.circleMarker([25.2, 55.27], { radius: 9, color: '#1A1305', weight: 3, fillColor: '#F5A524', fillOpacity: 1 });
+      destMk = L.circleMarker([25.2, 55.27], { radius: 8, color: '#FFFFFF', weight: 2, fillColor: '#34C3B5', fillOpacity: 1 });
+    }
+    setTimeout(function () { lmap.invalidateSize(); updateMap(); }, 60);
+  };
+  N.follow = function () { follow = true; updateMap(); };
+  function updateMap() {
+    var t = N.trip; if (!lmap || !t) return;
+    if (t.pos) {
+      carMk.setLatLng([t.pos.lat, t.pos.lng]);
+      if (!lmap.hasLayer(carMk)) carMk.addTo(lmap);
+      if (follow) lmap.setView([t.pos.lat, t.pos.lng], Math.max(lmap.getZoom(), 14), { animate: true });
+    }
+    if (t.dest && t.dest.lat != null) {
+      destMk.setLatLng([t.dest.lat, t.dest.lng]);
+      if (!lmap.hasLayer(destMk)) destMk.addTo(lmap);
+      var key = t.dest.lat + ',' + t.dest.lng;
+      if (t.pos && (Date.now() - lastRouteAt > 90000 || routeFor !== key)) fetchRoute(t, key);
+    }
+  }
+  function fetchRoute(t, key) {
+    lastRouteAt = Date.now(); routeFor = key;
+    fetch('https://router.project-osrm.org/route/v1/driving/' + t.pos.lng + ',' + t.pos.lat + ';' + t.dest.lng + ',' + t.dest.lat + '?overview=full&geometries=geojson')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var c = j.routes && j.routes[0] && j.routes[0].geometry && j.routes[0].geometry.coordinates;
+        if (c && N.trip === t) routeLn.setLatLngs(c.map(function (p) { return [p[1], p[0]]; }));
+      }).catch(function () { });
+  }
+  function clearMap() {
+    if (!lmap) return;
+    routeLn.setLatLngs([]);
+    if (lmap.hasLayer(destMk)) lmap.removeLayer(destMk);
+    routeFor = ''; follow = true;
+  }
   N.recenter = function () { A.openMaps(JSON.stringify(N.trip && N.trip.dest || {})); };
   N.upcoming = function () { return null; };
   N.mapMessage = function () { return ''; };
@@ -179,7 +233,8 @@
       '<div class="natMid"><div class="dial big"><b data-b="speed">0</b><span>KM/H</span></div>' +
       '<div class="grow"><div class="lab">Arrival</div><div class="bigeta" data-b="eta">--:--</div>' +
       '<div class="ell" style="font-weight:600;font-size:15px" data-b="dest"></div><div class="s13 mute ell" data-b="sub"></div></div></div>' +
-      '<div class="prog"><i data-b="prog"></i></div><div class="hint" data-b="hint"></div></div>' +
+      '<div class="prog"><i data-b="prog"></i></div><div class="hint" data-b="hint"></div>' +
+      '<div class="map natMap" id="mapSlot"><button type="button" class="round natCenter" data-a="mapfollow" aria-label="Center map on car">' + ic('target', 20, 'currentColor', 2.2) + '</button></div></div>' +
       '<div class="natBottom"><div class="' + (i ? 'st2' : 'st4') + '">' + stats + '</div>' + acts + '</div></div>';
   };
   function distLabel(m) { return m >= 1000 ? U.fmt(m / 1000, 1) + ' km' : Math.max(10, Math.round(m / 10) * 10) + ' m'; }

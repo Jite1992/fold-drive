@@ -220,7 +220,7 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     fun geocode(q: String): String = try {
         val g = android.location.Geocoder(this, java.util.Locale.ENGLISH)
-        val r = g.getFromLocationName(q, 1, 22.5, 51.5, 26.5, 56.5)?.firstOrNull() ?: g.getFromLocationName(q, 1)?.firstOrNull()
+        val r = g.getFromLocationName(q, 1, 22.5, 51.5, 26.5, 56.5)?.firstOrNull()
         if (r == null) "null" else JSONObject().put("lat", r.latitude).put("lng", r.longitude).toString()
     } catch (_: Exception) { "null" }
 

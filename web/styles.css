@@ -260,3 +260,14 @@ a{color:inherit;text-decoration:none}
 .hint{flex-direction:column;align-items:stretch}
 .hint>.btn{align-self:flex-start}
 .mrow .badge{flex:0 0 auto;position:static}
+
+/* built-in map on the Android navigation screen */
+.nv.nat{flex:1;min-height:0}
+.nv.nat.i{grid-template-rows:minmax(0,1fr)}
+.nv.nat .natTop{flex:1;min-height:0}
+.natMap{position:relative;flex:1;min-height:180px;border-radius:18px;overflow:hidden;background:var(--map)}
+.natMap .gmap{position:absolute;inset:0}
+.natCenter{position:absolute;z-index:500;right:10px;bottom:10px;width:46px;height:46px;background:var(--bg);border:1px solid var(--line);color:var(--fg)}
+.leaflet-container{background:var(--map);font-family:var(--body)}
+.leaflet-control-attribution{background:rgba(13,17,23,.7) !important;color:#9AA6B4 !important;font-size:10px}
+.leaflet-control-attribution a{color:#C9D2DC !important}

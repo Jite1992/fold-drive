@@ -903,6 +903,7 @@
         break;
       case 'pref': FD.prefToggle(el.getAttribute('data-k')); break;
       case 'openmaps': FD.nav.recenter(); break;
+      case 'mapfollow': if (typeof FD.nav.follow === 'function') FD.nav.follow(); break;
       case 'evnav':
         var ev = (FD.events || [])[+el.getAttribute('data-i')];
         if (ev && ev.location) startNav({ name: ev.title, query: ev.location }); else toast('This meeting has no location');
