@@ -44,6 +44,7 @@ class MainActivity : Activity() {
 
     lateinit var web: WebView
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var cameraUri: Uri? = null
     private val main = Handler(Looper.getMainLooper())
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -80,8 +81,21 @@ class MainActivity : Activity() {
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
                 fileCallback?.onReceiveValue(null)
                 fileCallback = callback
+                val wantsImage = params.acceptTypes.any { it.startsWith("image") }
                 return try {
-                    startActivityForResult(params.createIntent(), REQ_FILE); true
+                    val pick = params.createIntent()
+                    val intent = if (wantsImage) {
+                        // Offer the camera (to scan a receipt) as well as the gallery.
+                        val dir = java.io.File(cacheDir, "receipts").apply { mkdirs() }
+                        val file = java.io.File(dir, "receipt_" + System.currentTimeMillis() + ".jpg")
+                        val uri = androidx.core.content.FileProvider.getUriForFile(this@MainActivity, "$packageName.files", file)
+                        cameraUri = uri
+                        val cam = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                            .putExtra(MediaStore.EXTRA_OUTPUT, uri)
+                            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        Intent.createChooser(pick, "Receipt photo").putExtra(Intent.EXTRA_INITIAL_INTENTS, arrayOf(cam))
+                    } else { cameraUri = null; pick }
+                    startActivityForResult(intent, REQ_FILE); true
                 } catch (_: Exception) {
                     fileCallback = null; false
                 }
@@ -118,8 +132,12 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             REQ_FILE -> {
-                fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+                var result = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+                val cam = cameraUri
+                if (result == null && resultCode == RESULT_OK && cam != null) result = arrayOf(cam)
+                fileCallback?.onReceiveValue(result)
                 fileCallback = null
+                cameraUri = null
             }
             REQ_VOICE -> {
                 val text = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
@@ -380,10 +398,20 @@ class MainActivity : Activity() {
         return arr.toString()
     }
 
-    fun saveDownload(name: String, text: String): Boolean = try {
+    /** Street, area and city for a position, from the phone's own geocoder (no key needed). */
+    @Suppress("DEPRECATION")
+    fun revgeo(lat: Double, lng: Double): String = try {
+        val a = android.location.Geocoder(this, java.util.Locale.ENGLISH).getFromLocation(lat, lng, 1)?.firstOrNull()
+        if (a == null) "" else {
+            val parts = listOfNotNull(a.thoroughfare, a.subLocality ?: a.subAdminArea, a.locality).filter { it.isNotBlank() }.distinct()
+            if (parts.isNotEmpty()) parts.joinToString(", ") else (a.getAddressLine(0) ?: "")
+        }
+    } catch (_: Exception) { "" }
+
+    fun saveDownload(name: String, text: String, mime: String = "application/json"): Boolean = try {
         val v = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
             put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
         }
         val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v)

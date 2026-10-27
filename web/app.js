@@ -49,6 +49,7 @@
     return '<svg width="' + (s || 22) + '" height="' + (s || 22) + '" viewBox="0 0 24 24" fill="none" stroke="' + (c || 'currentColor') + '" stroke-width="' + (w || 2) + '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + P[n] + '</svg>';
   }
   FD.ic = ic;
+  FD.icons = P;
 
   /* ---------- stored data ---------- */
   var DEFAULT_PRICES = {
@@ -210,7 +211,7 @@
   /* ---------- trips ---------- */
   FD.saveTrip = function (t) {
     trips.unshift(t);
-    trips = trips.slice(0, 100);
+    trips = trips.slice(0, 2000);
     save('fd-trips', trips);
   };
   function weekKm() {
@@ -310,6 +311,10 @@
     return '<div class="recent card"><div class="sb"><div style="font-weight:600;font-size:20px">Today & tomorrow</div><span class="lab">' + fmt(weekKm()) + ' km this week</span></div>' +
       (rows || '<div class="empty">No meetings in the next day and a half.</div>') + '</div>';
   }
+  function logRow() {
+    var st = FD.logs ? FD.logs.monthStats() : { trips: 0, km: 0, cost: 0 };
+    return '<button type="button" class="fuelrow" data-a="screen" data-s="logs">' + ic('list', 22, '#34C3B5') + '<b>Trip log · ' + st.trips + (st.trips === 1 ? ' trip' : ' trips') + ' this month</b><span>' + fmt(st.km) + ' km · AED ' + fmt(st.cost) + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>';
+  }
   function homeC() {
     var t = now(), F = calcFuel();
     return '<div class="hm c">' +
@@ -320,6 +325,7 @@
       '<div class="qp">' + placeBtn(settings.places[0], 0, 'qp') + placeBtn(settings.places[1], 1, 'qp') + '</div></div>' + trafficAlert() +
       appTiles('c') +
       '<button type="button" class="fuelrow" data-a="screen" data-s="fuel">' + ic('fuel', 22, '#F5A524') + '<b>Fuel · ' + (F.avg ? fmt(F.avg, 1) + ' km/L avg' : 'track km/L') + '</b><span>' + (F.avg ? F.proj[1].aed + ' / mo' : 'Log fill-up') + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>' +
+      logRow() +
       voiceBar('c') + '</div>';
   }
   function homeI() {
@@ -332,6 +338,7 @@
       '<div class="sb"><div class="clk"><b>' + t.time + '</b><em>' + t.day + '</em><span>' + t.date + '</span></div>' +
       '<div class="row"><span class="pill">' + ic('wheel', 14, 'currentColor', 2.2) + 'Drive mode</span>' +
       '<button type="button" class="btn" data-a="free">' + ic('wheel', 18) + 'Track a drive</button>' +
+      '<button type="button" class="btn" data-a="screen" data-s="logs">' + ic('list', 18) + 'Trip log</button>' +
       '<button type="button" class="sq greybtn" style="border-radius:999px" data-a="screen" data-s="settings" aria-label="Settings">' + ic('sliders', 20) + '</button></div></div>' +
       tripBanner() + setupBanner() +
       '<div class="mid">' +
@@ -682,6 +689,8 @@
       return '<div class="modal" data-a="close"><div class="mbox" role="dialog" aria-label="' + name + '"><h2>' + name + '</h2>' + body +
         '<div class="row"><button type="button" class="btn amber" data-a="open" data-app="' + app + '" style="flex:1">Open ' + name + '</button><button type="button" class="btn" data-a="close">Close</button></div></div></div>';
     }
+    if (S.modal === 'summary' && S.summary && FD.logs) return FD.logs.summary(S.summary);
+    if ((S.modal === 'logtrip' || S.modal === 'logphoto') && FD.logs) return FD.logs.modal();
     if (S.modal === 'summary' && S.summary) {
       var t = S.summary;
       function cell(k, v) { return '<div class="mini"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
@@ -709,6 +718,7 @@
     if (S.screen === 'nav' && FD.nav.trip) return FD.nav.renderScreen ? FD.nav.renderScreen(L) : navHTML(L);
     if (S.screen === 'fuel') return L === 'c' ? fuelC() : fuelI();
     if (S.screen === 'settings') return settingsHTML(L);
+    if (S.screen === 'logs' && FD.logs) return FD.logs.screen(L);
     return L === 'c' ? homeC() : homeI();
   }
   function render() {
@@ -716,6 +726,7 @@
     var active = document.activeElement, activeId = active && active.id, selStart = active && active.selectionStart;
     app.innerHTML = screenHTML() + modalHTML();
     if (S.screen === 'nav') { FD.nav.attach(document.getElementById('mapSlot')); updateNav(); }
+    if (FD.logs && FD.logs.afterRender) FD.logs.afterRender();
     if (activeId) {
       var el = document.getElementById(activeId);
       if (el && el.tagName === 'INPUT') { el.focus(); try { if (selStart != null) el.setSelectionRange(selStart, selStart); } catch (e) { } }
@@ -761,6 +772,14 @@
   }
   FD.startNav = startNav;
   FD.refreshHomeTraffic = refreshHomeTraffic;
+  FD.app = {
+    S: S,
+    trips: function () { return trips; },
+    setTrips: function (list) { trips = list; save('fd-trips', trips); },
+    saveTrips: function () { save('fd-trips', trips); },
+    render: function () { render(); },
+    softRender: function () { var a = document.activeElement; if (!(a && a.tagName === 'INPUT')) render(); }
+  };
   FD.back = function () {
     if (S.modal) { S.modal = null; S.picker = null; render(); return true; }
     if (S.screen === 'home') return false;
@@ -773,8 +792,10 @@
     var t = FD.nav.end(); if (!t) return;
     var F = calcFuel();
     var km = t.distance / 1000, min = Math.max(0, (t.endedAt - t.startedAt) / 60000);
-    var rec = { start: t.startedAt, end: t.endedAt, km: km, min: min, avg: min > 0.5 ? km / (min / 60) : 0, top: t.top || 0, dest: t.dest, litres: F.avg ? km / F.avg : 0, cost: F.avg ? km / F.avg * F.price : 0 };
+    var rec = { id: Date.now(), start: t.startedAt, end: t.endedAt, km: km, min: min, avg: min > 0.5 ? km / (min / 60) : 0, top: t.top || 0, dest: t.dest, litres: F.avg ? km / F.avg : 0, cost: F.avg ? km / F.avg * F.price : 0 };
+    if (FD.logs) FD.logs.enrich(rec, t);
     if (km >= 0.2) FD.saveTrip(rec);
+    S.parkDone = null; S.park = {};
     if (showSummary && km >= 0.2) { S.summary = rec; S.modal = 'summary'; }
     else if (showSummary) toast('Trip ended · too short to save');
   }
@@ -830,6 +851,7 @@
     var a = el.getAttribute('data-a');
     if (a === 'close' && el.classList.contains('modal') && ev.target !== el) return;
     var g, i;
+    if (FD.logs && FD.logs.click(a, el)) return;
     switch (a) {
       case 'screen': show(el.getAttribute('data-s')); break;
       case 'back': show(FD.nav.trip && S.prev === 'nav' ? 'nav' : 'home'); break;
@@ -915,6 +937,7 @@
     var tg = ev.target;
     var st = tg.getAttribute && tg.getAttribute('data-search');
     if (st) { runSearch(st, tg.value); return; }
+    if (FD.logs && FD.logs.input(tg)) return;
     var k = tg.getAttribute && tg.getAttribute('data-k');
     if (k) {
       S.form[k] = tg.value;
@@ -924,6 +947,7 @@
   });
   document.addEventListener('change', function (ev) {
     var tg = ev.target;
+    if (FD.logs && FD.logs.change(tg)) return;
     if (tg.hasAttribute('data-price')) { settings.price = tg.value; saveSettings(); render(); }
     else if (tg.hasAttribute('data-gradesel')) { settings.grade = tg.value; saveSettings(); render(); }
     else if (tg.hasAttribute('data-inputsel')) { settings.fuelInput = tg.value; saveSettings(); render(); toast(tg.value === 'amount' ? 'Refills: enter the amount paid' : 'Refills: enter litres filled'); }

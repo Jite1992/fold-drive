@@ -35,6 +35,8 @@ class Bridge(private val a: MainActivity) {
     @JavascriptInterface fun voice() = ui { a.startVoice() }
     @JavascriptInterface fun locate() = ui { a.locateOnce() }
     @JavascriptInterface fun saveFile(name: String, text: String): Boolean = a.saveDownload(name, text)
+    @JavascriptInterface fun saveText(name: String, text: String, mime: String): Boolean = a.saveDownload(name, text, mime)
+    @JavascriptInterface fun revgeo(lat: Double, lng: Double): String = a.revgeo(lat, lng)
     @JavascriptInterface fun keepOn(on: Boolean) = ui { a.keepScreenOn(on) }
 
     @JavascriptInterface fun setPref(key: String, value: String) {

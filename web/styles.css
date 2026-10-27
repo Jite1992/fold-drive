@@ -272,3 +272,11 @@ a{color:inherit;text-decoration:none}
 .leaflet-control-attribution{background:rgba(13,17,23,.7) !important;color:#9AA6B4 !important;font-size:10px}
 .leaflet-control-attribution a{color:#C9D2DC !important}
 .natMap .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.55)}
+
+/* trip log */
+.lrow{display:flex;flex-direction:column;gap:4px;width:100%;padding:12px 14px;border-radius:14px;background:var(--p1);border:1px solid var(--line);text-align:left}
+.lrow b{font-weight:600;font-size:15px}
+.lamt{font:700 18px var(--display);color:var(--amber);white-space:nowrap}
+.lchip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:var(--p2);font-size:12px;font-weight:600;color:var(--soft)}
+.lg .hero b{font-size:44px}
+.form h3{display:flex;align-items:center;gap:8px}

@@ -46,6 +46,7 @@ android {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.core:core:1.13.1")
 }
 
 // The app's screens are the same HTML/CSS/JS as the web version in /web.

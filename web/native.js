@@ -130,6 +130,7 @@
       var near = s.straight == null || s.straight < 300000;   // a lookup 300+ km away is the wrong place
       t.straight = s.straight != null && s.straight < 300000 ? s.straight : null;
       if (s.hasPos) t.pos = { lat: s.lat, lng: s.lng };
+      if (s.startLat != null && !t.startPos) t.startPos = { lat: s.startLat, lng: s.startLng };
       if (s.heading != null) t.heading = s.heading;
       if (t.dest && s.dest && s.dest.lat != null && (near || !s.hasPos)) { t.dest.lat = s.dest.lat; t.dest.lng = s.dest.lng; }
       else if (t.dest && s.dest && s.dest.lat != null && s.hasPos && !near) { t.dest.lat = null; t.dest.lng = null; }

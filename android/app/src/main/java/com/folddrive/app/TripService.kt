@@ -46,6 +46,7 @@ class TripService : Service(), LocationListener {
     private var prevLat = 0.0; private var prevLng = 0.0; private var prevTs = 0L; private var havePrev = false
     private var curLat = 0.0; private var curLng = 0.0; private var acc = 999f; private var hasPos = false
     private var heading = -1f
+    private var startLat = 0.0; private var startLng = 0.0; private var haveStart = false
     private var lastNotifUpdate = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -54,7 +55,7 @@ class TripService : Service(), LocationListener {
         if (intent == null) { stopSelf(); return START_NOT_STICKY }
         dest = try { JSONObject(intent.getStringExtra("dest") ?: "{}") } catch (_: Exception) { JSONObject() }
         startedAt = System.currentTimeMillis()
-        distance = 0.0; speedKmh = 0.0; topKmh = 0.0; haveLast = false; havePrev = false; hasPos = false
+        distance = 0.0; speedKmh = 0.0; topKmh = 0.0; haveLast = false; havePrev = false; hasPos = false; haveStart = false
         instance = this
         startForeground(NOTIF_ID, buildNotification("Recording your trip"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         startLocation()
@@ -119,6 +120,7 @@ class TripService : Service(), LocationListener {
         speedKmh = if (sp < 2) 0.0 else sp
         if (accuracy <= 30f && speedKmh > topKmh) topKmh = speedKmh
         curLat = loc.latitude; curLng = loc.longitude; acc = accuracy; hasPos = true
+        if (!haveStart && accuracy <= 80f) { startLat = loc.latitude; startLng = loc.longitude; haveStart = true }
         if (loc.hasBearing() && speedKmh > 5) heading = loc.bearing
         publish()
     }
@@ -139,6 +141,7 @@ class TripService : Service(), LocationListener {
         o.put("gps", lm != null)
         if (hasPos) { o.put("lat", curLat); o.put("lng", curLng); o.put("acc", acc.toDouble()) }
         if (heading >= 0) o.put("heading", heading.toDouble())
+        if (haveStart) { o.put("startLat", startLat); o.put("startLng", startLng) }
         o.put("dest", dest)
         if (hasPos && dest.has("lat") && !dest.isNull("lat")) {
             o.put("straight", dist(curLat, curLng, dest.optDouble("lat"), dest.optDouble("lng")))

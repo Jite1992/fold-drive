@@ -253,6 +253,7 @@
     if (acc <= 30 && t.speed > t.top) t.top = t.speed;
     if (p.coords.heading != null && !isNaN(p.coords.heading) && t.speed > 5) t.heading = p.coords.heading;
     t.pos = c; t.acc = acc;
+    if (!t.startPos && acc <= 80) t.startPos = c;
     if (t.status === 'locating') {
       if (t.dest) { t.status = 'routing'; plan(c); }
       else t.status = 'free';
