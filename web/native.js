@@ -156,9 +156,24 @@
     if (!lmap) {
       lmap = L.map(mapDiv, { zoomControl: false, attributionControl: true }).setView([25.2048, 55.2708], 15);
       lmap.attributionControl.setPrefix(false);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        subdomains: 'abcd', maxZoom: 19, attribution: '© OpenStreetMap © CARTO'
-      }).addTo(lmap);
+      // Free maps, no key: OpenStreetMap first; switch to Esri's street map if OSM tiles fail to load.
+      var sources = [
+        { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors', maxZoom: 19 },
+        { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attribution: 'Tiles © Esri', maxZoom: 19 }
+      ];
+      var srcIdx = 0, loadedOk = false, errors = 0, layer = null;
+      var useSource = function (i) {
+        if (layer) lmap.removeLayer(layer);
+        errors = 0; loadedOk = false; srcIdx = i;
+        layer = L.tileLayer(sources[i].url, { maxZoom: sources[i].maxZoom, attribution: sources[i].attribution, crossOrigin: false });
+        layer.on('tileload', function () { loadedOk = true; });
+        layer.on('tileerror', function () {
+          errors++;
+          if (!loadedOk && errors >= 4 && srcIdx < sources.length - 1) useSource(srcIdx + 1);
+        });
+        layer.addTo(lmap);
+      };
+      useSource(0);
       lmap.on('dragstart', function () { follow = false; });
       routeLn = L.polyline([], { color: '#34C3B5', weight: 6, opacity: 0.9 }).addTo(lmap);
       carMk = L.circleMarker([25.2, 55.27], { radius: 9, color: '#1A1305', weight: 3, fillColor: '#F5A524', fillOpacity: 1 });
