@@ -369,8 +369,8 @@
       avg: el > 30 ? fmt(km / (el / 3600)) : '0',
       driven: fmt(km, 1),
       kml: F.avg ? fmt(F.avg, 1) : '–',
-      tripL: F.avg ? fmt(km / F.avg, 1) : '–',
-      tripU: F.avg ? ' L · AED ' + fmt(km / F.avg * F.price) : ' L',
+      tripL: F.est ? fmt(km / F.est, 1) : '–',
+      tripU: F.est ? ' L · AED ' + fmt(km / F.est * F.price) : ' L',
       dest: t.dest ? t.dest.name : 'Free drive'
     };
     var left = mp && mp.leftMin != null ? mp.leftMin : null;

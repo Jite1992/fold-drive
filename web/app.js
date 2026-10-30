@@ -151,7 +151,8 @@
       var k = perDay * r[1], l = avg > 0 ? k / avg : 0;
       return { label: r[0], aed: perDay > 0 && avg > 0 ? 'AED ' + fmt(l * price) : '–', km: fmt(k) + ' km', l: fmt(l, 1) + ' L' };
     });
-    return { E: E, rows: rows, measured: measured, totL: totL, totKm: totKm, spent: spent, avg: avg, price: price, perDay: perDay, proj: proj };
+    var est = avg || (parseFloat(settings.defaultKmL) > 0 ? parseFloat(settings.defaultKmL) : 0);
+    return { E: E, rows: rows, measured: measured, totL: totL, totKm: totKm, spent: spent, avg: avg, est: est, price: price, perDay: perDay, proj: proj };
   }
   FD.calcFuel = calcFuel;
   function neighbours(date) {
@@ -281,7 +282,7 @@
   function voiceBar(L) {
     var right = L === 'i'
       ? '<button type="button" class="chipbtn" data-a="screen" data-s="fuel">' + ic('fuel', 18, '#F5A524') + 'Fuel · ' + fuelChip() + '</button>'
-      : '<button type="button" class="round greybtn" data-a="free" aria-label="Track a drive without a destination">' + ic('wheel', 22) + '</button>';
+      : '';
     return '<div class="voice"><button type="button" class="round amberbtn" data-a="listen" aria-label="Voice command">' + ic('mic', 22, 'currentColor', 2.2) + '</button>' +
       '<div class="grow"><b>Tap to speak</b><div class="s12 mute ell">"Navigate to office" · "Call Ahmed" · "Open WhatsApp"</div></div>' + right + '</div>';
   }
@@ -313,7 +314,7 @@
   }
   function logRow() {
     var st = FD.logs ? FD.logs.monthStats() : { trips: 0, km: 0, cost: 0 };
-    return '<button type="button" class="fuelrow" data-a="screen" data-s="logs">' + ic('list', 22, '#34C3B5') + '<b>Trip log · ' + st.trips + (st.trips === 1 ? ' trip' : ' trips') + ' this month</b><span>' + fmt(st.km) + ' km · AED ' + fmt(st.cost) + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>';
+    return '<button type="button" class="fuelrow" data-a="screen" data-s="logs">' + ic('list', 22, '#34C3B5') + '<b>Trip log</b><span>' + st.trips + (st.trips === 1 ? ' trip' : ' trips') + ' · ' + fmt(st.km) + ' km · AED ' + fmt(st.cost) + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>';
   }
   function homeC() {
     var t = now(), F = calcFuel();
@@ -323,6 +324,7 @@
       tripBanner() + setupBanner() + nextCard() +
       '<div class="navp"><div class="sb"><h2>Navigate</h2>' + ic('nav', 26, 'currentColor', 2.2) + '</div>' + searchBox('c', 'Where to?') +
       '<div class="qp">' + placeBtn(settings.places[0], 0, 'qp') + placeBtn(settings.places[1], 1, 'qp') + '</div></div>' + trafficAlert() +
+      '<button type="button" class="fuelrow" data-a="free">' + ic('wheel', 22, '#F5A524') + '<b>Track a drive</b><span>No destination</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>' +
       appTiles('c') +
       '<button type="button" class="fuelrow" data-a="screen" data-s="fuel">' + ic('fuel', 22, '#F5A524') + '<b>Fuel · ' + (F.avg ? fmt(F.avg, 1) + ' km/L avg' : 'track km/L') + '</b><span>' + (F.avg ? F.proj[1].aed + ' / mo' : 'Log fill-up') + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>' +
       logRow() +
@@ -405,8 +407,8 @@
       avg: elapsed > 30 ? fmt(km / (elapsed / 3600)) : '0',
       driven: fmt(km, 1),
       kml: F.avg ? fmt(F.avg, 1) : '–',
-      tripL: F.avg ? fmt(km / F.avg, 1) : '–',
-      tripU: F.avg ? (S.layout === 'i' ? ' L · AED ' + fmt(km / F.avg * F.price) : ' L') : ' L',
+      tripL: F.est ? fmt(km / F.est, 1) : '–',
+      tripU: F.est ? (S.layout === 'i' ? ' L · AED ' + fmt(km / F.est * F.price) : ' L') : ' L',
       dest: t.dest ? t.dest.name : 'Free drive'
     };
     if (t.route && t.remaining != null) {
@@ -566,6 +568,8 @@
       '<section class="sec"><h2>Quick-dial contacts</h2><p>Tap Calls while driving to ring these numbers with one tap, or say "Call" and the name.</p>' + contactRows + '<button type="button" class="btn amber" data-a="savecontacts">Save contacts</button></section>' +
       '<section class="sec"><h2>Driving</h2>' + (FD.native ? '' : '<div class="toggle">Voice guidance<button type="button" data-a="voicetoggle" aria-pressed="' + settings.voice + '" aria-label="Voice guidance"></button></div>') +
       '<div class="toggle">Fuel price auto-update<button type="button" data-a="auto" aria-pressed="' + settings.auto + '" aria-label="Fuel price auto-update"></button></div>' +
+      '<label class="s13 mute" for="defKml">Your car\'s km/L (used for trip fuel until two fill-ups are logged)</label>' +
+      '<input id="defKml" class="inp" type="number" inputmode="decimal" step="0.1" placeholder="e.g. 11.5" data-defkml value="' + esc(settings.defaultKmL || '') + '">' +
       '<label class="s13 mute" for="inputSel">When logging a refill, enter</label><select id="inputSel" class="inp" data-inputsel><option value="litres"' + (byAmount() ? '' : ' selected') + '>Litres filled</option><option value="amount"' + (byAmount() ? ' selected' : '') + '>Amount paid (AED)</option></select>' +
       '<label class="s13 mute" for="gradeSel">Fuel your car uses</label><select id="gradeSel" class="inp" data-gradesel>' + GRADES.map(function (g) { return '<option' + (g === settings.grade ? ' selected' : '') + '>' + g + '</option>'; }).join('') + '</select></section>' +
       '<section class="sec"><h2>Backup</h2><p>Your fill-ups, trips and settings are stored on this phone only. Export a backup file now and then, and import it after changing phones or clearing Chrome data.</p>' +
@@ -792,7 +796,7 @@
     var t = FD.nav.end(); if (!t) return;
     var F = calcFuel();
     var km = t.distance / 1000, min = Math.max(0, (t.endedAt - t.startedAt) / 60000);
-    var rec = { id: Date.now(), start: t.startedAt, end: t.endedAt, km: km, min: min, avg: min > 0.5 ? km / (min / 60) : 0, top: t.top || 0, dest: t.dest, litres: F.avg ? km / F.avg : 0, cost: F.avg ? km / F.avg * F.price : 0 };
+    var rec = { id: Date.now(), start: t.startedAt, end: t.endedAt, km: km, min: min, avg: min > 0.5 ? km / (min / 60) : 0, top: t.top || 0, dest: t.dest, litres: F.est ? km / F.est : 0, cost: F.est ? km / F.est * F.price : 0 };
     if (FD.logs) FD.logs.enrich(rec, t);
     if (km >= 0.2) FD.saveTrip(rec);
     S.parkDone = null; S.park = {};
@@ -950,6 +954,7 @@
     if (FD.logs && FD.logs.change(tg)) return;
     if (tg.hasAttribute('data-price')) { settings.price = tg.value; saveSettings(); render(); }
     else if (tg.hasAttribute('data-gradesel')) { settings.grade = tg.value; saveSettings(); render(); }
+    else if (tg.hasAttribute('data-defkml')) { settings.defaultKmL = tg.value; saveSettings(); toast(parseFloat(tg.value) > 0 ? 'Trip fuel now uses ' + tg.value + ' km/L until fill-ups are logged' : 'Default km/L cleared'); }
     else if (tg.hasAttribute('data-inputsel')) { settings.fuelInput = tg.value; saveSettings(); render(); toast(tg.value === 'amount' ? 'Refills: enter the amount paid' : 'Refills: enter litres filled'); }
     else if (tg.hasAttribute('data-pname')) { settings.places[+tg.getAttribute('data-pname')].name = tg.value.trim() || 'Place'; saveSettings(); }
     else if (tg.id === 'importFile' && tg.files && tg.files[0]) importData(tg.files[0]);

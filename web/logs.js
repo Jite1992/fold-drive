@@ -28,13 +28,21 @@
   /* ---------- trips: fuel, Salik and parking per trip ---------- */
   var salik = load('fd-salik', []);   // [{t, gate, amount, plate}]
   function trips() { return X.trips(); }
-  function litresOf(tr) {
-    if (tr.litres) return tr.litres;
-    var F = FD.calcFuel(); return F.avg ? tr.km / F.avg : null;
+  /* km/L for a trip: the one you typed for it, else the one used when it was saved, else today's estimate */
+  function kmlOf(tr) {
+    if (parseFloat(tr.kmLManual) > 0) return parseFloat(tr.kmLManual);
+    if (tr.litres > 0 && tr.km > 0) return tr.km / tr.litres;
+    var F = FD.calcFuel(); return F.est || null;
   }
+  function litresOf(tr) { var k = kmlOf(tr); return k ? tr.km / k : null; }
   function fuelCostOf(tr) {
-    if (tr.cost) return tr.cost;
     var l = litresOf(tr); return l != null ? l * (tr.price || FD.calcFuel().price) : null;
+  }
+  function kmlForm(tr) {
+    var k = kmlOf(tr);
+    return '<div class="row" style="flex-wrap:wrap"><label class="pin" for="kml-' + tr.id + '" style="flex:1;min-width:200px">Km/L for this trip' +
+      '<input id="kml-' + tr.id + '" type="number" inputmode="decimal" step="0.1" placeholder="e.g. 11.5" value="' + (k ? (Math.round(k * 10) / 10) : '') + '"></label>' +
+      '<button type="button" class="btn" data-a="setkml" data-id="' + tr.id + '">Update fuel</button></div>';
   }
   function salikOf(tr) {
     var a = tr.start - 3 * 60000, b = (tr.end || tr.start) + 3 * 60000;
@@ -138,7 +146,7 @@
       '<div class="s13 mute">' + esc(t.startAddr || 'Start') + ' → ' + esc(t.endAddr || (t.dest ? t.dest.name : 'End')) + '</div>' +
       '<div class="sumgrid">' + cell('Km driven', fmt(t.km, 1) + ' km') + cell('Time taken', dur(t.min)) + cell('Average speed', fmt(t.avg) + ' km/h') +
       cell('Fuel used', tt.fuelL != null ? fmt(tt.fuelL, 1) + ' L' : '–') + cell('Fuel cost', tt.fuelL != null ? 'AED ' + fmt(tt.fuelAed, 2) : '–') + cell('Top speed', fmt(t.top) + ' km/h') + '</div>' +
-      (tt.fuelL == null ? '<div class="s12 mute">Fuel figures appear once you have logged two fill-ups.</div>' : '') +
+      kmlForm(t) + '<div class="s12 mute">' + (parseFloat(t.kmLManual) > 0 ? 'Using the km/L you entered for this trip.' : (FD.calcFuel().avg ? 'Using your average from fill-ups. Change it for this trip if you know better.' : 'Enter your car\'s km/L to get fuel and cost for this trip.')) + '</div>' +
       (parkedDone ? '<div class="pv">Parking saved · AED ' + fmt(tt.parkingAed, 2) + '</div><button type="button" class="btn amber" data-a="close">Done</button>' : parkForm(t)) +
       '</div></div>';
   };
@@ -208,7 +216,7 @@
         r('Time taken', dur(tr.min)) + r('Distance driven', fmt(tr.km, 1) + ' km') +
         (tr.routeKm ? r('Google Maps route', fmt(tr.routeKm, 1) + ' km') : '') +
         r('Average speed', fmt(tr.avg) + ' km/h') + r('Top speed', fmt(tr.top) + ' km/h') +
-        r('Fuel used (estimate)', tt.fuelL != null ? fmt(tt.fuelL, 2) + ' L' + (tr.kmL ? '<br><span class="s12 mute">at ' + fmt(tr.kmL, 1) + ' km/L</span>' : '') : '–') +
+        r('Fuel used (estimate)', tt.fuelL != null ? fmt(tt.fuelL, 2) + ' L<br><span class="s12 mute">at ' + fmt(kmlOf(tr), 1) + ' km/L' + (parseFloat(tr.kmLManual) > 0 ? ' (entered)' : '') + '</span>' : '–') +
         r('Fuel cost', tt.fuelL != null ? 'AED ' + fmt(tt.fuelAed, 2) + (tr.price ? '<br><span class="s12 mute">at AED ' + fmt(tr.price, 2) + '/L</span>' : '') : '–') +
         r('Salik', tt.salik.length ? tt.salik.map(function (c) { return hhmm(c.t) + ' ' + esc(c.gate) + ' · AED ' + fmt(c.amount); }).join('<br>') : 'None') +
         r('Parking', tt.parking.length ? tt.parking.map(function (p) { return 'AED ' + fmt(p.amount, 2) + (p.location ? ' · ' + esc(p.location) : ''); }).join('<br>') : 'None') +
@@ -218,7 +226,7 @@
           '<button type="button" class="del" data-a="pkdel" data-id="' + tr.id + '" data-p="' + p.id + '" aria-label="Delete this parking">' + FD.ic('trash', 16) + '</button>';
       }).join('');
       return '<div class="modal" data-a="close"><div class="mbox" role="dialog" aria-label="Trip details"><h2>Trip details</h2>' + body +
-        (photos ? '<div class="row" style="flex-wrap:wrap">' + photos + '</div>' : '') +
+        (photos ? '<div class="row" style="flex-wrap:wrap">' + photos + '</div>' : '') + kmlForm(tr) +
         (S.addPark ? parkForm(tr) : '<div class="row"><button type="button" class="btn amber" data-a="pkadd" style="flex:1">' + FD.ic('parking', 18) + 'Add parking</button>' +
           '<button type="button" class="btn" data-a="logdel" data-id="' + tr.id + '">' + FD.ic('trash', 18) + 'Delete</button><button type="button" class="btn" data-a="close">Close</button></div>') +
         '</div></div>';
@@ -329,13 +337,13 @@
   function exportMonth() {
     var k = S.logMonth, list = monthTrips(k).slice().reverse();
     var cols = ['Date', 'Start time', 'End time', 'From', 'To', 'Destination', 'Distance (km)', 'Time taken (min)', 'Average speed (km/h)', 'Top speed (km/h)',
-      'Fuel used (L)', 'Fuel cost (AED)', 'Salik crossings', 'Salik (AED)', 'Parking (AED)', 'Parking location', 'Trip total (AED)'];
+      'Km/L', 'Fuel used (L)', 'Fuel cost (AED)', 'Salik crossings', 'Salik (AED)', 'Parking (AED)', 'Parking location', 'Trip total (AED)'];
     function q(v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
     var lines = [cols.join(',')];
     list.forEach(function (tr) {
       var tt = tripTotals(tr), d = new Date(tr.start);
       lines.push([d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()), hhmm(tr.start), hhmm(tr.end || tr.start), tr.startAddr || '', tr.endAddr || '', tr.dest ? tr.dest.name : '',
-        tr.km.toFixed(1), Math.round(tr.min), Math.round(tr.avg), Math.round(tr.top), tt.fuelL != null ? tt.fuelL.toFixed(2) : '', tt.fuelL != null ? tt.fuelAed.toFixed(2) : '',
+        tr.km.toFixed(1), Math.round(tr.min), Math.round(tr.avg), Math.round(tr.top), kmlOf(tr) ? kmlOf(tr).toFixed(1) : '', tt.fuelL != null ? tt.fuelL.toFixed(2) : '', tt.fuelL != null ? tt.fuelAed.toFixed(2) : '',
         tt.salik.length, tt.salikAed.toFixed(2), tt.parkingAed.toFixed(2), tt.parking.map(function (p) { return p.location; }).join('; '), tt.total.toFixed(2)].map(q).join(','));
     });
     var name = 'fold-drive-trips-' + k + '.csv', text = '﻿' + lines.join('\r\n');
@@ -361,6 +369,14 @@
         if (tr) (tr.parking || []).forEach(function (pp) { if (pp.receiptId) delReceipt(pp.receiptId); });
         X.setTrips(trips().filter(function (t) { return String(t.id) !== el.getAttribute('data-id'); }));
         S.modal = null; X.render(); FD.toast('Trip deleted'); return true;
+      case 'setkml':
+        var tk = findTrip(el.getAttribute('data-id')), inp = document.getElementById('kml-' + el.getAttribute('data-id'));
+        var v = inp ? parseFloat(inp.value) : NaN;
+        if (!tk) return true;
+        if (!(v > 0 && v < 60)) { FD.toast('Enter km/L between 1 and 60.'); return true; }
+        tk.kmLManual = v; tk.litres = tk.km / v; tk.price = tk.price || FD.calcFuel().price; tk.cost = tk.litres * tk.price;
+        X.saveTrips(); if (S.summary && String(S.summary.id) === String(tk.id)) S.summary = tk;
+        X.render(); FD.toast('Fuel updated · ' + fmt(tk.litres, 2) + ' L · AED ' + fmt(tk.cost, 2)); return true;
       case 'pkadd': S.addPark = true; S.park = {}; X.render(); return true;
       case 'pkskip':
         if (S.modal === 'summary') { S.modal = null; S.park = {}; } else S.addPark = false;
