@@ -1,17 +1,17 @@
 {
-  "updated": "2026-10-01",
-  "month": "October 2026",
-  "source": "UAE Fuel Price Committee, as reported by Khaleej Times",
+  "updated": "2026-11-01",
+  "month": "November 2026",
+  "source": "https://www.arabianbusiness.com/business/retail/uae-petrol-prices-november-2026 (confirmed by blog.oneclickdrive.com and dubicars.com)",
   "grades": {
-    "Super 98": 4.40,
-    "Special 95": 4.28,
-    "E-Plus 91": 4.21,
-    "Diesel": 4.80
+    "Super 98": 4.16,
+    "Special 95": 4.04,
+    "E-Plus 91": 3.97,
+    "Diesel": 4.75
   },
   "previous": {
-    "Super 98": 3.80,
-    "Special 95": 3.69,
-    "E-Plus 91": 3.61,
-    "Diesel": 4.30
+    "Super 98": 4.4,
+    "Special 95": 4.28,
+    "E-Plus 91": 4.21,
+    "Diesel": 4.8
   }
 }
