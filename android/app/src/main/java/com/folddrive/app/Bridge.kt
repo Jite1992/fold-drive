@@ -39,6 +39,17 @@ class Bridge(private val a: MainActivity) {
     @JavascriptInterface fun revgeo(lat: Double, lng: Double): String = a.revgeo(lat, lng)
     @JavascriptInterface fun keepOn(on: Boolean) = ui { a.keepScreenOn(on) }
 
+    @JavascriptInterface fun pendingTrips(): String = DriveStore.pending(a)
+    @JavascriptInterface fun ackTrips(ids: String) = DriveStore.ackPending(a, ids)
+    @JavascriptInterface fun tagUpdates(): String = DriveStore.tags(a)
+    @JavascriptInterface fun ackTags(ids: String) = DriveStore.ackTags(a, ids)
+    @JavascriptInterface fun setTag(id: String, type: String) = DriveStore.tagFromApp(a, id)
+    @JavascriptInterface fun untagged(id: String, end: Long, label: String) = DriveStore.registerUntagged(a, id, end, label, "")
+    @JavascriptInterface fun takeOpen(): String = a.takeOpen()
+    @JavascriptInterface fun saveBase64(name: String, b64: String, mime: String): Boolean = a.saveBase64(name, b64, mime)
+    @JavascriptInterface fun shareBase64(name: String, b64: String, mime: String) = ui { a.shareBase64(name, b64, mime) }
+    @JavascriptInterface fun ocr(id: String, dataUrl: String) = a.ocr(id, dataUrl)
+
     @JavascriptInterface fun setPref(key: String, value: String) {
         a.getSharedPreferences("fd", android.content.Context.MODE_PRIVATE).edit().putString(key, value).apply()
         ui { TripService.instance?.updateOverlay() }

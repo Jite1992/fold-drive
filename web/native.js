@@ -119,6 +119,8 @@
     t.endedAt = Date.now();
     return t;
   };
+  /* the phone already ended and saved the drive (Android Auto disconnected) */
+  N.abandon = function () { stopPoll(); N.trip = null; clearMap(); try { A.keepOn(false); } catch (e) { } };
   function startPoll() { stopPoll(); poll = setInterval(pull, 1000); pull(); }
   function stopPoll() { if (poll) clearInterval(poll); poll = null; }
   function pull() {

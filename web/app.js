@@ -321,13 +321,13 @@
     return '<div class="hm c">' +
       '<div class="sb"><div class="clk"><b>' + t.time + '</b><span>' + t.dShort + '</span></div>' +
       '<button type="button" class="sq greybtn" style="border-radius:999px" data-a="screen" data-s="settings" aria-label="Settings">' + ic('sliders', 20) + '</button></div>' +
-      tripBanner() + setupBanner() + nextCard() +
+      tripBanner() + (FD.work ? FD.work.banner() : '') + setupBanner() + nextCard() +
       '<div class="navp"><div class="sb"><h2>Navigate</h2>' + ic('nav', 26, 'currentColor', 2.2) + '</div>' + searchBox('c', 'Where to?') +
       '<div class="qp">' + placeBtn(settings.places[0], 0, 'qp') + placeBtn(settings.places[1], 1, 'qp') + '</div></div>' + trafficAlert() +
       '<button type="button" class="fuelrow" data-a="free">' + ic('wheel', 22, '#F5A524') + '<b>Track a drive</b><span>No destination</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>' +
       appTiles('c') +
       '<button type="button" class="fuelrow" data-a="screen" data-s="fuel">' + ic('fuel', 22, '#F5A524') + '<b>Fuel · ' + (F.avg ? fmt(F.avg, 1) + ' km/L avg' : 'track km/L') + '</b><span>' + (F.avg ? F.proj[1].aed + ' / mo' : 'Log fill-up') + '</span>' + ic('chev', 16, '#9AA6B4', 2.4) + '</button>' +
-      logRow() +
+      logRow() + (FD.work ? FD.work.homeRow() : '') +
       voiceBar('c') + '</div>';
   }
   function homeI() {
@@ -341,8 +341,9 @@
       '<div class="row"><span class="pill">' + ic('wheel', 14, 'currentColor', 2.2) + 'Drive mode</span>' +
       '<button type="button" class="btn" data-a="free">' + ic('wheel', 18) + 'Track a drive</button>' +
       '<button type="button" class="btn" data-a="screen" data-s="logs">' + ic('list', 18) + 'Trip log</button>' +
+      '<button type="button" class="btn" data-a="screen" data-s="work">' + ic('brief', 18) + 'Work expenses</button>' +
       '<button type="button" class="sq greybtn" style="border-radius:999px" data-a="screen" data-s="settings" aria-label="Settings">' + ic('sliders', 20) + '</button></div></div>' +
-      tripBanner() + setupBanner() +
+      tripBanner() + (FD.work ? FD.work.banner() : '') + setupBanner() +
       '<div class="mid">' +
       '<div class="navp"><div class="sb"><h2>Navigate</h2>' + ic('nav', 28, 'currentColor', 2.2) + '</div>' + searchBox('i', 'Search a place or address') +
       '<div class="places">' + settings.places.map(function (p, i) { return placeBtn(p, i); }).join('') + '</div>' + trafficAlert() + '</div>' +
@@ -668,6 +669,7 @@
 
   /* ---------- modals ---------- */
   function modalHTML() {
+    if (FD.work && FD.work.modal) { var wm = FD.work.modal(); if (wm) return wm; }
     if (S.modal === 'calls') {
       var rows = settings.contacts.filter(function (c) { return c.name && c.number; }).map(function (c) {
         if (FD.native) return '<button type="button" class="mrow" data-a="dial" data-n="' + esc(c.number) + '">' + ic('phone', 22, '#6EA8FE') + '<span>' + esc(c.name) + '<small>' + esc(c.number) + '</small></span></button>';
@@ -723,6 +725,7 @@
     if (S.screen === 'fuel') return L === 'c' ? fuelC() : fuelI();
     if (S.screen === 'settings') return settingsHTML(L);
     if (S.screen === 'logs' && FD.logs) return FD.logs.screen(L);
+    if (S.screen === 'work' && FD.work) return FD.work.screen(L);
     return L === 'c' ? homeC() : homeI();
   }
   function render() {
@@ -798,7 +801,7 @@
     var km = t.distance / 1000, min = Math.max(0, (t.endedAt - t.startedAt) / 60000);
     var rec = { id: Date.now(), start: t.startedAt, end: t.endedAt, km: km, min: min, avg: min > 0.5 ? km / (min / 60) : 0, top: t.top || 0, dest: t.dest, litres: F.est ? km / F.est : 0, cost: F.est ? km / F.est * F.price : 0 };
     if (FD.logs) FD.logs.enrich(rec, t);
-    if (km >= 0.2) FD.saveTrip(rec);
+    if (km >= 0.2) { FD.saveTrip(rec); if (FD.work) FD.work.afterSave(rec); }
     S.parkDone = null; S.park = {};
     if (showSummary && km >= 0.2) { S.summary = rec; S.modal = 'summary'; }
     else if (showSummary) toast('Trip ended · too short to save');
@@ -855,6 +858,7 @@
     var a = el.getAttribute('data-a');
     if (a === 'close' && el.classList.contains('modal') && ev.target !== el) return;
     var g, i;
+    if (FD.work && FD.work.click(a, el)) return;
     if (FD.logs && FD.logs.click(a, el)) return;
     switch (a) {
       case 'screen': show(el.getAttribute('data-s')); break;
@@ -941,6 +945,7 @@
     var tg = ev.target;
     var st = tg.getAttribute && tg.getAttribute('data-search');
     if (st) { runSearch(st, tg.value); return; }
+    if (FD.work && FD.work.input(tg)) return;
     if (FD.logs && FD.logs.input(tg)) return;
     var k = tg.getAttribute && tg.getAttribute('data-k');
     if (k) {
@@ -951,6 +956,7 @@
   });
   document.addEventListener('change', function (ev) {
     var tg = ev.target;
+    if (FD.work && FD.work.change(tg)) return;
     if (FD.logs && FD.logs.change(tg)) return;
     if (tg.hasAttribute('data-price')) { settings.price = tg.value; saveSettings(); render(); }
     else if (tg.hasAttribute('data-gradesel')) { settings.grade = tg.value; saveSettings(); render(); }
@@ -975,6 +981,7 @@
     if (nb.next && odo >= nb.next.odo) { S.err = 'Odometer must be less than ' + fmt(nb.next.odo) + ' km, the reading on ' + dayLabel(nb.next.date) + '.'; render(); return; }
     fuel.entries.push({ id: Date.now(), date: fm.date, odo: odo, litres: Math.round(litres * 100) / 100, rate: rate, paid: byAmount() ? f.amount : null });
     saveFuel();
+    if (FD.work && !nb.next) FD.work.setOdo(odo);
     S.form = { date: isoDay(), odo: '', litres: '', amount: '', rate: '' }; S.err = ''; S.showForm = false;
     render();
     toast(nb.prev ? 'Refill saved · ' + fmt(odo - nb.prev.odo) + ' km · ' + fmt((odo - nb.prev.odo) / litres, 1) + ' km/L' : 'Starting odometer reading saved');

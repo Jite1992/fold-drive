@@ -31,7 +31,27 @@ class TripService : Service(), LocationListener {
         @Volatile var instance: TripService? = null
         private const val CHANNEL = "trip"
         private const val NOTIF_ID = 7
+
+        /** Android Auto connected: record a drive in the background (if none is running). */
+        fun startAuto(c: android.content.Context) {
+            if (instance != null) { instance?.carBound = true; return }
+            if (c.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                DriveStore.notifySimple(c, 9, "Android Auto connected", "Fold Drive needs location access to record this drive. Open the app to allow it.", null)
+                return
+            }
+            val i = Intent(c, TripService::class.java).putExtra("dest", "{}").putExtra("auto", true)
+            try { c.startForegroundService(i) } catch (e: Exception) {
+                // Android did not allow a background start: one tap on this notification starts it
+                val pi = PendingIntent.getForegroundService(c, 8, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                DriveStore.notifySimple(c, 9, "Android Auto connected", "Tap to start recording this drive", pi)
+            }
+        }
+        /** Android Auto disconnected: save the drive and ask Work or Personal. */
+        fun endAuto(c: android.content.Context) { instance?.finishToPending() }
     }
+
+    var isAuto = false
+    var carBound = false
 
     private var lm: LocationManager? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -53,11 +73,20 @@ class TripService : Service(), LocationListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) { stopSelf(); return START_NOT_STICKY }
+        if (instance != null && intent.getBooleanExtra("auto", false)) { carBound = true; return START_NOT_STICKY }
+        isAuto = intent.getBooleanExtra("auto", false); carBound = isAuto
+        (getSystemService(NotificationManager::class.java))?.cancel(9)
         dest = try { JSONObject(intent.getStringExtra("dest") ?: "{}") } catch (_: Exception) { JSONObject() }
         startedAt = System.currentTimeMillis()
         distance = 0.0; speedKmh = 0.0; topKmh = 0.0; haveLast = false; havePrev = false; hasPos = false; haveStart = false
         instance = this
-        startForeground(NOTIF_ID, buildNotification("Recording your trip"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        try {
+            startForeground(NOTIF_ID, buildNotification(if (isAuto) "Android Auto connected · recording this drive" else "Recording your trip"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } catch (e: Exception) {
+            instance = null
+            DriveStore.notifySimple(this, 9, "Could not record the drive", "Allow location \"All the time\" for Fold Drive (Settings › Work expenses) so drives can be recorded in the background.", null)
+            stopSelf(); return START_NOT_STICKY
+        }
         startLocation()
         lookUpDestination()
         handler.removeCallbacks(tick)
@@ -163,6 +192,23 @@ class TripService : Service(), LocationListener {
         }
     }
 
+    /** Ends the drive here (no screen involved): stores it for the app and posts the Work / Personal question. */
+    fun finishToPending() {
+        val end = System.currentTimeMillis()
+        val km = distance / 1000.0
+        if (km >= 0.3) {
+            val o = JSONObject()
+            o.put("id", startedAt.toString()); o.put("start", startedAt); o.put("end", end)
+            o.put("km", km); o.put("top", topKmh); o.put("auto", isAuto)
+            if (haveStart) { o.put("startLat", startLat); o.put("startLng", startLng) }
+            if (hasPos) { o.put("endLat", curLat); o.put("endLng", curLng) }
+            if (dest.length() > 0) o.put("dest", dest)
+            DriveStore.addPending(this, o)
+        }
+        stopSelf()
+        MainActivity.instance?.js("window.FD && FD.work && FD.work.nativeEnded()")
+    }
+
     private fun statsLine(): String {
         val sec = (System.currentTimeMillis() - startedAt) / 1000
         val km = distance / 1000.0
@@ -190,7 +236,7 @@ class TripService : Service(), LocationListener {
         )
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("Fold Drive · " + (dest.optString("name").ifBlank { "Free drive" }))
+            .setContentTitle("Fold Drive · " + (dest.optString("name").ifBlank { if (isAuto) "Android Auto drive" else "Free drive" }))
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

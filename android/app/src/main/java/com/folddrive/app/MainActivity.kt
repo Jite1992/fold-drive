@@ -40,7 +40,9 @@ class MainActivity : Activity() {
         private const val REQ_VOICE = 12
         private const val REQ_PERM = 13
         const val MAPS = "com.google.android.apps.maps"
+        @Volatile var instance: MainActivity? = null
     }
+    @Volatile var openTrip: String? = null
 
     lateinit var web: WebView
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -50,6 +52,8 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
+        openTrip = intent?.getStringExtra("trip")
         web = WebView(this)
         web.setBackgroundColor(0xFF0D1117.toInt())
         setContentView(web)
@@ -106,6 +110,74 @@ class MainActivity : Activity() {
     }
 
     fun js(code: String) = main.post { web.evaluateJavascript(code, null) }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra("trip")?.let { openTrip = it; js("window.FD && FD.work && FD.work.checkOpen()") }
+    }
+
+    override fun onDestroy() {
+        if (instance === this) instance = null
+        super.onDestroy()
+    }
+
+    fun takeOpen(): String { val t = openTrip ?: ""; openTrip = null; return t }
+
+    /** Saves a binary file (the claim workbook) to Downloads. */
+    fun saveBase64(name: String, b64: String, mime: String): Boolean = try {
+        val v = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        }
+        val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v)
+        if (uri == null) false else {
+            contentResolver.openOutputStream(uri)?.use { it.write(android.util.Base64.decode(b64, android.util.Base64.DEFAULT)) }
+            true
+        }
+    } catch (_: Exception) { false }
+
+    /** Opens the share sheet (email, WhatsApp, Teams…) with the file. */
+    fun shareBase64(name: String, b64: String, mime: String) {
+        try {
+            val dir = java.io.File(cacheDir, "exports").apply { mkdirs() }
+            val file = java.io.File(dir, name)
+            file.writeBytes(android.util.Base64.decode(b64, android.util.Base64.DEFAULT))
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", file)
+            val send = Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
+                .putExtra(Intent.EXTRA_SUBJECT, name.substringBeforeLast('.').replace('_', ' '))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(send, "Send the claim"))
+        } catch (e: Exception) { toast("Could not share: " + (e.message ?: "")) }
+    }
+
+    /** Reads the text on a parking slip photo (on the phone, Google ML Kit). Tries each rotation and keeps the best. */
+    fun ocr(id: String, dataUrl: String) {
+        Thread {
+            val out = JSONObject().put("id", id)
+            try {
+                val bytes = android.util.Base64.decode(dataUrl.substringAfter(","), android.util.Base64.DEFAULT)
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                val rec = com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS)
+                val words = Regex("AED|TOTAL|PAID|VAT|FEE|PARK|DATE|AMOUNT|TRN|RECEIPT|TIME|NET|DUBAI|TAX", RegexOption.IGNORE_CASE)
+                var best = JSONArray(); var bestScore = -1
+                for (rot in listOf(0, 90, 270, 180)) {
+                    val r = com.google.android.gms.tasks.Tasks.await(rec.process(com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, rot)))
+                    val lines = JSONArray(); var score = 0
+                    for (b in r.textBlocks) for (l in b.lines) {
+                        val box = l.boundingBox
+                        lines.put(JSONObject().put("t", l.text).put("x", box?.left ?: 0).put("y", box?.top ?: 0).put("r", box?.right ?: 0).put("b", box?.bottom ?: 0))
+                        score += words.findAll(l.text).count() * 10 + (if (Regex("[A-Za-z]{3,}").containsMatchIn(l.text)) 1 else 0)
+                    }
+                    if (score > bestScore) { bestScore = score; best = lines }
+                    if (rot == 0 && score >= 40) break
+                }
+                rec.close()
+                out.put("lines", best)
+            } catch (e: Exception) { out.put("error", e.message ?: "OCR failed") }
+            js("window.FD && FD.onOcr && FD.onOcr(" + out.toString() + ")")
+        }.start()
+    }
 
     override fun onResume() {
         super.onResume()
@@ -175,6 +247,11 @@ class MainActivity : Activity() {
         val prefs = getSharedPreferences("fd", MODE_PRIVATE)
         o.put("overlayOn", prefs.getString("overlay", "1") == "1")
         o.put("splitOn", prefs.getString("split", "1") == "1")
+        o.put("bglocation", granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+        o.put("car", MapsListener.carState)
+        o.put("autotrack", prefs.getString("autotrack", "1") == "1")
+        o.put("remind", prefs.getString("remind", "1") == "1")
+        o.put("askTag", prefs.getString("askTag", "1") == "1")
         o.put("version", try { packageManager.getPackageInfo(packageName, 0).versionName } catch (_: Exception) { "" })
         return o.toString()
     }
@@ -183,6 +260,8 @@ class MainActivity : Activity() {
         try {
             when (what) {
                 "location" -> requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), REQ_PERM)
+                "bglocation" -> if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) requestThing("location")
+                    else requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), REQ_PERM)
                 "calendar" -> requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), REQ_PERM)
                 "phone" -> requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), REQ_PERM)
                 "notifications" -> if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_PERM)

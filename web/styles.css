@@ -280,3 +280,22 @@ a{color:inherit;text-decoration:none}
 .lchip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:var(--p2);font-size:12px;font-weight:600;color:var(--soft)}
 .lg .hero b{font-size:44px}
 .form h3{display:flex;align-items:center;gap:8px}
+
+/* ---------- work expenses ---------- */
+.g2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.tagbtn{height:52px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--soft);font-weight:600;font-size:17px;display:flex;align-items:center;justify-content:center;gap:8px}
+.tagbtn[aria-pressed="true"]{border:2px solid var(--amber);background:var(--amberbg);color:var(--amber);font-weight:700}
+.wbox{display:flex;flex-direction:column;border-radius:18px;background:var(--p1);border:1px solid var(--line);overflow:hidden;flex-shrink:0}
+.wline{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line)}
+.wline:last-child{border-bottom:0}
+.wline b{font-weight:600;font-size:15px}
+.wamt{font:700 19px var(--display);white-space:nowrap}
+.lchip.work{background:var(--amberbg);color:var(--amber)}
+.lchip.warn{background:#3A2A12;color:#FFC35C}
+.lrow.dim{opacity:.6}
+.btn.dashb{background:transparent;border:1px dashed var(--line);color:var(--soft);width:100%}
+.setup.warnb{background:#2B2414;border-color:var(--amber);color:#FFD9A0}
+.mrow[aria-pressed] .radio{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);flex:0 0 auto}
+.mrow[aria-pressed="true"]{outline:1px solid var(--amber)}
+.mrow[aria-pressed="true"] .radio{border-color:var(--amber);background:radial-gradient(var(--amber) 45%,transparent 50%)}
+.wcols{grid-template-columns:minmax(320px,400px) minmax(0,1fr)}

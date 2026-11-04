@@ -1,6 +1,14 @@
 package com.folddrive.app
 
 import android.app.Notification
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.app.PendingIntent
 import android.app.Person
 import android.graphics.Bitmap
@@ -28,6 +36,8 @@ class MapsListener : NotificationListenerService() {
         const val MAPS = "com.google.android.apps.maps"
         const val WA = "com.whatsapp"
         const val WAB = "com.whatsapp.w4b"
+        const val AUTO = "com.google.android.projection.gearhead"
+        @Volatile var carState = -1   // -1 unknown, 0 not connected, 1 car OS, 2 Android Auto
         val DIALERS = setOf(
             "com.samsung.android.dialer", "com.google.android.dialer", "com.android.server.telecom",
             "com.samsung.android.incallui", "com.android.phone"
@@ -51,8 +61,57 @@ class MapsListener : NotificationListenerService() {
         }
     }
 
+    /* ---------- Android Auto: start a trip when it connects, end it when it disconnects ---------- */
+    private val handler = Handler(Looper.getMainLooper())
+    private var carConnected = false
+    private var lostAt = 0L
+    private val carReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent) { checkCar() }
+    }
+    private val carTick = object : Runnable {
+        override fun run() { checkCar(); handler.postDelayed(this, if (carConnected) 15_000L else 45_000L) }
+    }
+
+    private fun queryCar(): Int? = try {
+        contentResolver.query(Uri.parse("content://androidx.car.app.connection"), arrayOf("CarConnectionState"), null, null, null)?.use { c ->
+            if (c.moveToNext()) c.getInt(c.getColumnIndexOrThrow("CarConnectionState")) else 0
+        }
+    } catch (_: Exception) { null }
+
+    private fun autoNotification(): Boolean = try {
+        activeNotifications?.any { it.packageName == AUTO && it.isOngoing } ?: false
+    } catch (_: Exception) { false }
+
+    fun checkCar() {
+        val q = queryCar()
+        val now = (q ?: if (autoNotification()) 2 else 0) > 0
+        carState = q ?: (if (now) 2 else 0)
+        if (DriveStore.pref(this, "autotrack", "1") != "1") { carConnected = now; return }
+        if (now) {
+            lostAt = 0L
+            if (!carConnected) { carConnected = true; TripService.startAuto(this) }
+        } else if (carConnected) {
+            // wireless Android Auto can drop for a few seconds: only end the drive after 45 s without it
+            if (lostAt == 0L) { lostAt = System.currentTimeMillis(); handler.postDelayed({ checkCar() }, 46_000L) }
+            else if (System.currentTimeMillis() - lostAt >= 45_000L) { carConnected = false; lostAt = 0L; TripService.endAuto(this) }
+        }
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        try { unregisterReceiver(carReceiver) } catch (_: Exception) { }
+        super.onDestroy()
+    }
+
     override fun onListenerConnected() {
         instance = this
+        try {
+            val f = IntentFilter("androidx.car.app.connection.action.CAR_CONNECTION_UPDATED")
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(carReceiver, f, Context.RECEIVER_EXPORTED) else registerReceiver(carReceiver, f)
+        } catch (_: Exception) { }
+        carConnected = TripService.instance?.isAuto == true
+        handler.removeCallbacks(carTick)
+        handler.post(carTick)
         NavBus.listenerConnected = true
         try {
             activeNotifications?.forEach { if (it.packageName == MAPS && isNav(it)) readMaps(it) }
@@ -67,10 +126,12 @@ class MapsListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == MAPS && isNav(sbn)) readMaps(sbn)
+        if (sbn.packageName == AUTO) handler.post { checkCar() }
         if (sbn.packageName == WA || sbn.packageName == WAB || sbn.packageName in DIALERS) refreshChats()
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (sbn.packageName == AUTO) handler.postDelayed({ checkCar() }, 2000L)
         if (sbn.packageName == MAPS && isNav(sbn)) {
             val stillNav = try { activeNotifications?.any { it.packageName == MAPS && isNav(it) } ?: false } catch (_: Exception) { false }
             if (!stillNav) {

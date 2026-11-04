@@ -129,10 +129,13 @@
     return '<div class="form" style="border-color:var(--amber)"><h3>' + FD.ic('parking', 20, '#F5A524') + ' Parking for this trip</h3>' +
       '<div class="fields">' +
       '<label for="pk-amt">Amount paid (AED)<input id="pk-amt" type="number" inputmode="decimal" step="any" data-pk="amount" placeholder="e.g. 10" value="' + esc(p.amount || '') + '"></label>' +
+      '<label for="pk-vat">VAT (if on the slip)<input id="pk-vat" type="number" inputmode="decimal" step="any" data-pk="vat" placeholder="e.g. 0.71" value="' + esc(p.vat || '') + '"></label>' +
+      '<label for="pk-when">Date and time paid<input id="pk-when" type="datetime-local" data-pk="paidAt" value="' + esc(p.paidAt || (FD.work ? FD.work.toLocalInput(tr.end || tr.start) : '')) + '"></label>' +
       '<label for="pk-loc">Location<input id="pk-loc" type="text" data-pk="location" placeholder="Where you parked" value="' + esc(p.location != null ? p.location : (tr.endAddr || '')) + '"></label></div>' +
       '<div class="row" style="flex-wrap:wrap"><label class="btn" for="pk-photo">' + FD.ic('camera', 18) + (p.receiptId ? 'Retake receipt photo' : 'Scan receipt') + '</label>' +
       '<input id="pk-photo" type="file" accept="image/*" capture="environment" data-pkphoto hidden>' +
-      (p.thumb ? '<img src="' + p.thumb + '" alt="Receipt" style="height:56px;border-radius:8px">' : '<span class="s12 mute">Optional</span>') + '</div>' +
+      (p.thumb ? '<img src="' + p.thumb + '" alt="Receipt" style="height:56px;border-radius:8px">' : '<span class="s12 mute">' + (tr.type === 'work' ? 'Needed for the claim' : 'Optional') + '</span>') +
+      (S.ocrBusy ? '<span class="s12" style="color:var(--teal)">Reading the slip…</span>' : '') + '</div>' +
       '<div class="row"><button type="button" class="btn amber" data-a="pksave" data-id="' + tr.id + '" style="flex:1">Save parking</button>' +
       '<button type="button" class="btn" data-a="pkskip">' + (S.modal === 'summary' ? 'No parking' : 'Cancel') + '</button></div></div>';
   }
@@ -165,6 +168,7 @@
     var chips = '';
     if (tt.salik.length) chips += '<span class="lchip">' + FD.ic('gate', 14) + 'Salik ×' + tt.salik.length + ' · AED ' + fmt(tt.salikAed) + '</span>';
     if (tt.parking.length) chips += '<span class="lchip">' + FD.ic('parking', 14) + 'Parking AED ' + fmt(tt.parkingAed, 2) + '</span>';
+    chips = (tr.type === 'work' ? '<span class="lchip work">' + FD.ic('brief', 14) + 'Work' + (tr.notes ? ' · ' + esc(tr.notes) : '') + '</span>' : tr.type === 'personal' ? '<span class="lchip">Personal</span>' : '<span class="lchip warn">Work or Personal?</span>') + (tr.auto ? '<span class="lchip">Android Auto</span>' : '') + chips;
     return '<button type="button" class="lrow" data-a="logopen" data-id="' + tr.id + '">' +
       '<div class="sb"><b>' + dayLong(tr.start) + ' · ' + hhmm(tr.start) + '–' + hhmm(tr.end || tr.start) + '</b><span class="lamt">AED ' + fmt(tt.total, 2) + '</span></div>' +
       '<div class="s13 ell" style="color:var(--soft)">' + esc(tr.startAddr || 'Start') + ' → ' + esc(tr.endAddr || (tr.dest ? tr.dest.name : 'End')) + '</div>' +
@@ -172,7 +176,10 @@
       (chips ? '<div class="row" style="flex-wrap:wrap;gap:6px">' + chips + '</div>' : '') + '</button>';
   }
   FD.logs.screen = function (L) {
-    var k = S.logMonth, list = monthTrips(k);
+    if (!S.logMonth) S.logMonth = monthKey(new Date());
+    var lf = S.logFilter || 'all', k = S.logMonth, list = lf === 'untagged' ? trips().filter(function (t) { return !t.type && t.start > Date.now() - 120 * 86400000; }) : monthTrips(k);
+    if (lf === 'work') list = list.filter(function (t) { return t.type === 'work'; });
+    if (lf === 'personal') list = list.filter(function (t) { return t.type === 'personal'; });
     var T = list.map(tripTotals);
     var km = sum(list, function (t) { return t.km; }), min = sum(list, function (t) { return t.min; });
     var fl = sum(T, function (x) { return x.fuelL; }), fa = sum(T, function (x) { return x.fuelAed; });
@@ -194,7 +201,9 @@
       '<p class="s12 mute" style="margin:0">Download your trips statement from the Salik website or app as Excel, then import it here. Each crossing is matched to the drive it happened on by its time.</p>' +
       (un.length ? '<div class="empty" style="font-size:13px"><b style="color:var(--fg)">' + un.length + ' Salik crossing' + (un.length > 1 ? 's' : '') + ' not matched to a logged trip</b><br>' +
         un.slice(0, 8).map(function (c) { return dayLong(c.t) + ' ' + hhmm(c.t) + ' · ' + esc(c.gate) + ' · AED ' + fmt(c.amount); }).join('<br>') + (un.length > 8 ? '<br>…' : '') + '</div>' : '');
-    var rows = list.length ? list.map(tripRow).join('') : '<div class="empty">No trips logged in ' + monthLabel(k) + '. Trips are saved when you tap End.</div>';
+    var filt = '<div class="chips">' + [['all', 'All'], ['work', 'Work'], ['personal', 'Personal'], ['untagged', 'Not marked']].map(function (f) {
+      return '<button type="button" class="chip" data-a="logfilter" data-f="' + f[0] + '" aria-pressed="' + (lf === f[0]) + '">' + f[1] + '</button>'; }).join('') + '</div>';
+    var rows = filt + (list.length ? list.map(tripRow).join('') : '<div class="empty">' + (lf === 'untagged' ? 'Every drive is marked Work or Personal.' : 'No ' + (lf === 'all' ? '' : lf + ' ') + 'trips logged in ' + monthLabel(k) + '.') + '</div>');
     var head = '<div class="fhd"><button type="button" class="backbtn" data-a="back" aria-label="Back">' + FD.ic('back', 20, 'currentColor', 2.4) + '</button><h1>Trip log</h1>' + FD.ic('list', 24, '#F5A524') + '</div>';
     if (L === 'i') {
       return '<div class="fu i lg">' + head + '<div class="cols"><div class="colL">' + summary + '</div><div class="colR"><span class="lab">Trips · newest first</span><div class="hist">' + rows + '</div></div></div></div>';
@@ -291,20 +300,46 @@
     var cDate = findCol(head, /date/i), cTime = findCol(head, /time/i, /date/i);
     if (cDate < 0) cDate = findCol(head, /time/i);
     var cGate = findCol(head, /gate|location|toll|description|point/i);
-    var cAmt = findCol(head, /amount|charge|fare|aed|value|debit|fee/i);
-    var cPlate = findCol(head, /plate|vehicle/i);
+    var cAmt = findCol(head, /amount|charge|fare|aed|value|debit|fee/i, /vat|total/i);
+    if (cAmt < 0) cAmt = findCol(head, /amount|charge|fare|aed|value|debit|fee/i);
+    var cVat = findCol(head, /vat/i), cTot = findCol(head, /total/i);
+    var cPlate = findCol(head, /plate|vehicle/i), cTx = findCol(head, /transaction\s*id|trans.*no|reference/i);
+    var cPost = findCol(head, /post/i), cDir = findCol(head, /direction/i), cTag = findCol(head, /tag/i);
     if (cDate < 0) throw new Error('No date column found in this file.');
+    if (findCol(head, /gate|toll/i) < 0) throw new Error('This does not look like a Salik statement (no toll gate column).');
+    function num(v) { var n = parseFloat(String(v == null ? '' : v).replace(/[^\d.\-]/g, '')); return isNaN(n) ? null : Math.abs(n); }
+    function txt(c, row) { return c >= 0 && row[c] != null ? String(row[c]).trim() : ''; }
+    // the report's heading lines (account, period), so the exported Salik sheet reads like the original
+    var meta = {};
+    for (var k = 0; k < hi; k++) (rows[k] || []).forEach(function (c) {
+      var v = String(c || '').trim();
+      if (/account\s*no/i.test(v)) meta.account = v;
+      else if (/trip\(s\)\s*from/i.test(v)) meta.period = v;
+      else if (/trip\(s\)\s*type/i.test(v)) meta.type = v;
+    });
+    parseRows.meta = meta;
     var out = [];
     for (var i = hi + 1; i < rows.length; i++) {
       var row = rows[i] || [];
+      if (/total/i.test(row.join(' ')) && !txt(cGate, row)) continue;
       var t = parseWhen(row[cDate], cTime >= 0 ? row[cTime] : null);
       if (!t) continue;
-      var amt = cAmt >= 0 ? parseFloat(String(row[cAmt] == null ? '' : row[cAmt]).replace(/[^\d.\-]/g, '')) : NaN;
-      out.push({ t: t, gate: cGate >= 0 ? String(row[cGate] || '').trim() : 'Salik gate', amount: isNaN(amt) ? 0 : Math.abs(amt), plate: cPlate >= 0 ? String(row[cPlate] || '') : '' });
+      var amt = cAmt >= 0 ? num(row[cAmt]) : null, vat = cVat >= 0 ? num(row[cVat]) : null, tot = cTot >= 0 ? num(row[cTot]) : null;
+      if (tot == null) tot = (amt || 0) + (vat || 0);
+      if (amt == null) amt = tot - (vat || 0);
+      var dateTxt = typeof row[cDate] === 'number' ? new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : txt(cDate, row);
+      var timeTxt = cTime >= 0 ? (typeof row[cTime] === 'number' ? new Date(t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : txt(cTime, row)) : '';
+      out.push({ t: t, gate: cGate >= 0 ? String(row[cGate] || '').trim() : 'Salik gate', amount: tot, plate: txt(cPlate, row),
+        raw: { txid: txt(cTx, row), date: dateTxt, time: timeTxt, post: cPost >= 0 ? (typeof row[cPost] === 'number' ? dateTxt : txt(cPost, row)) : dateTxt,
+          gate: txt(cGate, row), dir: txt(cDir, row), tag: txt(cTag, row), plate: txt(cPlate, row), amt: Math.round(amt * 100) / 100, vat: Math.round((vat || 0) * 100) / 100, total: Math.round(tot * 100) / 100 } });
     }
     return out;
   }
   FD.logs.parseSalikRows = parseRows;
+  FD.logs.salik = function () { return salik; };
+  FD.logs.saveSalik = function () { save('fd-salik', salik); };
+  FD.logs.importSalik = function (f) { importSalik(f); };
+  FD.logs.tripTotals = tripTotals; FD.logs.salikOf = salikOf; FD.logs.db = { put: putReceipt, get: getReceipt, del: delReceipt, shrink: shrink };
   function importSalik(file) {
     FD.toast('Reading Salik statement…');
     loadXlsx().then(function () {
@@ -321,7 +356,10 @@
         try { found = found.concat(parseRows(rows)); } catch (e) { if (!found.length && n === wb.SheetNames[wb.SheetNames.length - 1]) throw e; }
       });
       if (!found.length) throw new Error('No Salik crossings found in this file.');
-      var keys = {}; salik.forEach(function (c) { keys[c.t + '|' + c.gate] = 1; });
+      if (parseRows.meta && (parseRows.meta.account || parseRows.meta.period)) save('fd-salik-meta', parseRows.meta);
+      var keys = {}; salik.forEach(function (c, i) { keys[c.t + '|' + c.gate] = i + 1; });
+      // re-importing a statement fills in details older imports did not keep
+      found.forEach(function (c) { var i = keys[c.t + '|' + c.gate]; if (i && !salik[i - 1].raw) { salik[i - 1].raw = c.raw; salik[i - 1].amount = c.amount; } });
       var added = found.filter(function (c) { if (keys[c.t + '|' + c.gate]) return false; keys[c.t + '|' + c.gate] = 1; return true; });
       salik = salik.concat(added).sort(function (a, b) { return a.t - b.t; });
       save('fd-salik', salik);
@@ -361,6 +399,7 @@
         S.logMonth = monthKey(d); X.render(); return true;
       case 'logopen': S.logTrip = el.getAttribute('data-id'); S.modal = 'logtrip'; S.addPark = false; S.park = {}; X.render(); return true;
       case 'logexport': exportMonth(); return true;
+      case 'logfilter': S.logFilter = el.getAttribute('data-f'); X.render(); return true;
       case 'logphoto': S.logPhoto = el.getAttribute('data-r'); S.modal = 'logphoto'; X.render(); return true;
       case 'logphotoclose': S.modal = 'logtrip'; X.render(); return true;
       case 'logdel':
@@ -386,7 +425,9 @@
         var amt = parseFloat(pk.amount);
         if (!t2) return true;
         if (!(amt >= 0) || pk.amount === '' || pk.amount == null) { FD.toast('Enter the amount you paid for parking.'); return true; }
-        t2.parking = (t2.parking || []).concat([{ id: Date.now(), amount: amt, location: pk.location != null ? pk.location : (t2.endAddr || ''), receiptId: pk.receiptId || null, time: Date.now() }]);
+        if (t2.type === 'work' && !pk.receiptId) { FD.toast('Scan the parking slip: the photo is needed for the work claim.'); return true; }
+        var pvat = parseFloat(pk.vat), pwhen = pk.paidAt ? new Date(pk.paidAt).getTime() : (t2.end || t2.start);
+        t2.parking = (t2.parking || []).concat([{ id: Date.now(), amount: amt, vat: pvat > 0 ? Math.round(pvat * 100) / 100 : null, paidAt: isNaN(pwhen) ? null : pwhen, location: pk.location != null ? pk.location : (t2.endAddr || ''), receiptId: pk.receiptId || null, time: Date.now() }]);
         X.saveTrips();
         if (S.modal === 'summary') { S.parkDone = t2.id; S.summary = t2; } else S.addPark = false;
         S.park = {}; X.render(); FD.toast('Parking saved'); return true;
@@ -411,7 +452,7 @@
       var f = tg.files[0];
       shrink(f).then(function (url) {
         var id = 'r' + Date.now();
-        return putReceipt(id, url).then(function () { S.park = S.park || {}; S.park.receiptId = id; S.park.thumb = url; X.render(); FD.toast('Receipt photo added'); });
+        return putReceipt(id, url).then(function () { S.park = S.park || {}; S.park.receiptId = id; S.park.thumb = url; X.render(); if (FD.work && window.Android && window.Android.ocr) FD.work.ocr('pk:' + id, url); else FD.toast('Receipt photo added'); });
       }).catch(function () { FD.toast('Could not read that photo.'); });
       return true;
     }
