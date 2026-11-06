@@ -54,6 +54,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         instance = this
         openTrip = intent?.getStringExtra("trip")
+        TripService.recoverOrphan(this)
         web = WebView(this)
         web.setBackgroundColor(0xFF0D1117.toInt())
         setContentView(web)
@@ -114,6 +115,7 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra("trip")?.let { openTrip = it; js("window.FD && FD.work && FD.work.checkOpen()") }
+        if (intent.getBooleanExtra("showTrip", false)) js("window.FD && FD.nav && FD.nav.adopt && FD.nav.adopt(true)")
     }
 
     override fun onDestroy() {
@@ -182,6 +184,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         NavBus.appVisible = true
+        TripService.recoverOrphan(this)
         TripService.instance?.updateOverlay()
         js("window.FD && FD.onResume && FD.onResume()")
     }

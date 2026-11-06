@@ -48,6 +48,33 @@ class TripService : Service(), LocationListener {
         }
         /** Android Auto disconnected: save the drive and ask Work or Personal. */
         fun endAuto(c: android.content.Context) { instance?.finishToPending() }
+
+        private fun saved(c: android.content.Context) = c.getSharedPreferences("fd_active", android.content.Context.MODE_PRIVATE)
+
+        /**
+         * A drive whose recording stopped without being saved (Android closed the app in the background):
+         * carry on recording if Android Auto is still connected, otherwise save it up to the last position.
+         */
+        @Synchronized fun recoverOrphan(c: android.content.Context) {
+            if (instance != null) return
+            val js = saved(c).getString("s", null) ?: return
+            val o = try { JSONObject(js) } catch (_: Exception) { saved(c).edit().clear().apply(); return }
+            val fresh = System.currentTimeMillis() - o.optLong("lastAt") < 15 * 60_000L
+            if (fresh && o.optBoolean("auto") && MapsListener.carState > 0) {
+                val i = Intent(c, TripService::class.java).putExtra("resume", true)
+                try { c.startForegroundService(i); return } catch (_: Exception) { }
+            }
+            saved(c).edit().clear().apply()
+            val km = o.optDouble("distance") / 1000.0
+            if (km < 0.3) return
+            val p = JSONObject()
+            p.put("id", o.optLong("startedAt").toString()); p.put("start", o.optLong("startedAt")); p.put("end", o.optLong("lastAt"))
+            p.put("km", km); p.put("top", o.optDouble("top")); p.put("auto", o.optBoolean("auto"))
+            if (o.has("startLat")) { p.put("startLat", o.optDouble("startLat")); p.put("startLng", o.optDouble("startLng")) }
+            if (o.has("lat")) { p.put("endLat", o.optDouble("lat")); p.put("endLng", o.optDouble("lng")) }
+            o.optJSONObject("dest")?.let { if (it.length() > 0) p.put("dest", it) }
+            DriveStore.addPending(c, p)
+        }
     }
 
     var isAuto = false
@@ -72,13 +99,33 @@ class TripService : Service(), LocationListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent == null) { stopSelf(); return START_NOT_STICKY }
-        if (instance != null && intent.getBooleanExtra("auto", false)) { carBound = true; return START_NOT_STICKY }
-        isAuto = intent.getBooleanExtra("auto", false); carBound = isAuto
+        // a drive is already being recorded (for example started by Android Auto): keep its km and time
+        if (instance === this && intent != null) {
+            if (intent.getBooleanExtra("auto", false)) { carBound = true; return START_STICKY }
+            if (intent.hasExtra("dest")) {
+                val d = try { JSONObject(intent.getStringExtra("dest") ?: "{}") } catch (_: Exception) { JSONObject() }
+                if (d.length() > 0) { dest = d; lookUpDestination() }
+            }
+            return START_STICKY
+        }
+        val restore = intent == null || intent.getBooleanExtra("resume", false)
+        val saved = if (restore) saved(this).getString("s", null)?.let { try { JSONObject(it) } catch (_: Exception) { null } } else null
+        if (restore && saved == null) { stopSelf(); return START_NOT_STICKY }
         (getSystemService(NotificationManager::class.java))?.cancel(9)
-        dest = try { JSONObject(intent.getStringExtra("dest") ?: "{}") } catch (_: Exception) { JSONObject() }
-        startedAt = System.currentTimeMillis()
-        distance = 0.0; speedKmh = 0.0; topKmh = 0.0; haveLast = false; havePrev = false; hasPos = false; haveStart = false
+        if (saved != null) {
+            // Android restarted the recording: carry on from where it stopped
+            isAuto = saved.optBoolean("auto"); carBound = isAuto
+            dest = saved.optJSONObject("dest") ?: JSONObject()
+            startedAt = saved.optLong("startedAt"); distance = saved.optDouble("distance"); topKmh = saved.optDouble("top"); speedKmh = 0.0
+            havePrev = false; haveStart = saved.has("startLat"); startLat = saved.optDouble("startLat"); startLng = saved.optDouble("startLng")
+            hasPos = saved.has("lat"); curLat = saved.optDouble("lat"); curLng = saved.optDouble("lng")
+            haveLast = hasPos; lastLat = curLat; lastLng = curLng; lastTs = saved.optLong("lastAt")
+        } else {
+            isAuto = intent!!.getBooleanExtra("auto", false); carBound = isAuto
+            dest = try { JSONObject(intent.getStringExtra("dest") ?: "{}") } catch (_: Exception) { JSONObject() }
+            startedAt = System.currentTimeMillis()
+            distance = 0.0; speedKmh = 0.0; topKmh = 0.0; haveLast = false; havePrev = false; hasPos = false; haveStart = false
+        }
         instance = this
         try {
             startForeground(NOTIF_ID, buildNotification(if (isAuto) "Android Auto connected · recording this drive" else "Recording your trip"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -91,7 +138,24 @@ class TripService : Service(), LocationListener {
         lookUpDestination()
         handler.removeCallbacks(tick)
         handler.post(tick)
-        return START_NOT_STICKY
+        persist()
+        return START_STICKY
+    }
+
+    /* saved every few seconds, so a drive survives Android closing the app in the background */
+    private var lastPersist = 0L
+    private var lastMoveAt = System.currentTimeMillis()
+    private var lastMoveKm = 0.0
+    private var carLostAt = 0L
+    private fun persist() {
+        val o = JSONObject()
+        o.put("startedAt", startedAt)
+        o.put("auto", isAuto); o.put("distance", distance); o.put("top", topKmh); o.put("auto", isAuto)
+        o.put("lastAt", System.currentTimeMillis()); o.put("dest", dest)
+        if (haveStart) { o.put("startLat", startLat); o.put("startLng", startLng) }
+        if (hasPos) { o.put("lat", curLat); o.put("lng", curLng) }
+        saved(this).edit().putString("s", o.toString()).apply()
+        lastPersist = System.currentTimeMillis()
     }
 
     /** Finds the destination's coordinates on the phone (no key needed), for the km-left estimate. */
@@ -188,12 +252,24 @@ class TripService : Service(), LocationListener {
                 val nm = getSystemService(NotificationManager::class.java)
                 nm?.notify(NOTIF_ID, buildNotification(statsLine()))
             }
+            if (now - lastPersist > 10_000) persist()
+            // safety net for Android Auto drives: end it if the car has been disconnected for 2 minutes,
+            // or the car has not moved for 20 minutes
+            if (distance - lastMoveKm > 50) { lastMoveKm = distance; lastMoveAt = now }
+            if (isAuto) {
+                if (MapsListener.carState == 0) { if (carLostAt == 0L) carLostAt = now } else carLostAt = 0L
+                if ((carLostAt > 0 && now - carLostAt > 120_000) || now - lastMoveAt > 20 * 60_000L) { finishToPending(); return }
+            }
             handler.postDelayed(this, 1000)
         }
     }
 
     /** Ends the drive here (no screen involved): stores it for the app and posts the Work / Personal question. */
     fun finishToPending() {
+        if (finished) return
+        finished = true
+        handler.removeCallbacks(tick)
+        saved(this).edit().clear().apply()
         val end = System.currentTimeMillis()
         val km = distance / 1000.0
         if (km >= 0.3) {
@@ -231,7 +307,7 @@ class TripService : Service(), LocationListener {
             nm?.createNotificationChannel(NotificationChannel(CHANNEL, "Trip recording", NotificationManager.IMPORTANCE_LOW))
         }
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            this, 0, Intent(this, MainActivity::class.java).putExtra("showTrip", true).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return Notification.Builder(this, CHANNEL)
@@ -244,8 +320,11 @@ class TripService : Service(), LocationListener {
             .build()
     }
 
+    private var finished = false
+
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        saved(this).edit().clear().apply()
         try { lm?.removeUpdates(this) } catch (_: Exception) { }
         overlay?.hide()
         overlay = null

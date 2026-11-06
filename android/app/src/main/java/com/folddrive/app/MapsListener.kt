@@ -110,6 +110,7 @@ class MapsListener : NotificationListenerService() {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(carReceiver, f, Context.RECEIVER_EXPORTED) else registerReceiver(carReceiver, f)
         } catch (_: Exception) { }
         carConnected = TripService.instance?.isAuto == true
+        handler.postDelayed({ TripService.recoverOrphan(this) }, 3000L)
         handler.removeCallbacks(carTick)
         handler.post(carTick)
         NavBus.listenerConnected = true

@@ -119,6 +119,19 @@
     t.endedAt = Date.now();
     return t;
   };
+  /* a drive recorded by the phone (Android Auto, or one this screen lost track of): show it here */
+  N.adopt = function (show) {
+    var s = J(A.trip());
+    if (!s || !s.active) return false;
+    var isNew = !N.trip;
+    if (isNew) {
+      var d = s.dest && (s.dest.name || s.dest.query) ? s.dest : null;
+      N.trip = { startedAt: s.startedAt, distance: s.distance, speed: s.speed, top: s.top, dest: d, maps: null, waitingSince: Date.now(), auto: !!s.auto };
+      startPoll();
+    }
+    if (isNew || show) { if (FD.app.S.modal !== 'summary') FD.show('nav'); }
+    return true;
+  };
   /* the phone already ended and saved the drive (Android Auto disconnected) */
   N.abandon = function () { stopPoll(); N.trip = null; clearMap(); try { A.keepOn(false); } catch (e) { } };
   function startPoll() { stopPoll(); poll = setInterval(pull, 1000); pull(); }
@@ -126,6 +139,10 @@
   function pull() {
     var t = N.trip; if (!t) return;
     var s = J(A.trip());
+    if (!s || !s.active) {
+      t.missing = (t.missing || 0) + 1;
+      if (t.missing >= 5 && Date.now() - t.startedAt > 10000) { if (FD.work) FD.work.nativeEnded(); else { N.abandon(); FD.render(); } return; }
+    } else t.missing = 0;
     if (s && s.active) {
       t.distance = s.distance; t.speed = s.speed; t.top = s.top; t.startedAt = s.startedAt;
       t.hasPos = s.hasPos; t.gps = s.gps;
