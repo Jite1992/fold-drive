@@ -954,8 +954,24 @@
       document.querySelectorAll('[data-preview]').forEach(function (x) { x.textContent = pv; });
     }
   });
+  /* File pickers (receipt photos, Salik statement): the screen can be redrawn while the phone's
+     camera or gallery is open, which would drop the chosen file. Listen on the input itself so the
+     file still arrives, and hold redraws until it does. */
+  FD.picking = 0;
+  document.addEventListener('click', function (ev) {
+    var el = ev.target.closest && ev.target.closest('label[for], input[type="file"]'); if (!el) return;
+    var inp = el.tagName === 'INPUT' ? el : document.getElementById(el.getAttribute('for'));
+    if (!inp || inp.type !== 'file') return;
+    FD.picking = Date.now();
+    inp.onchange = function () { FD.picking = 0; inp._handled = true; handleChange(inp); };
+  }, true);
+  FD.isPicking = function () { return FD.picking && Date.now() - FD.picking < 180000; };
   document.addEventListener('change', function (ev) {
     var tg = ev.target;
+    if (tg._handled) { tg._handled = false; return; }
+    handleChange(tg);
+  });
+  function handleChange(tg) {
     if (FD.work && FD.work.change(tg)) return;
     if (FD.logs && FD.logs.change(tg)) return;
     if (tg.hasAttribute('data-price')) { settings.price = tg.value; saveSettings(); render(); }
@@ -964,7 +980,7 @@
     else if (tg.hasAttribute('data-inputsel')) { settings.fuelInput = tg.value; saveSettings(); render(); toast(tg.value === 'amount' ? 'Refills: enter the amount paid' : 'Refills: enter litres filled'); }
     else if (tg.hasAttribute('data-pname')) { settings.places[+tg.getAttribute('data-pname')].name = tg.value.trim() || 'Place'; saveSettings(); }
     else if (tg.id === 'importFile' && tg.files && tg.files[0]) importData(tg.files[0]);
-  });
+  }
   document.addEventListener('submit', function (ev) {
     var f = ev.target.closest('[data-f="search"]'); if (!f) return;
     ev.preventDefault();

@@ -469,7 +469,10 @@
     if (findTrip(id)) { S.logTrip = String(id); S.modal = 'logtrip'; S.addPark = false; S.park = {}; X.render(); }
   };
   var prevResume = FD.onResume;
-  FD.onResume = function () { FD.work.sync(); if (prevResume) prevResume(); FD.work.checkOpen(); if (FD.nav && FD.nav.adopt) FD.nav.adopt(false); };
+  FD.onResume = function () {
+    if (FD.isPicking && FD.isPicking()) { if (prevResume) prevResume(); return; }   // back from the camera / gallery
+    FD.work.sync(); if (prevResume) prevResume(); FD.work.checkOpen(); if (FD.nav && FD.nav.adopt) FD.nav.adopt(false);
+  };
 
   /* ---------- home screen pieces ---------- */
   FD.work.homeRow = function () {

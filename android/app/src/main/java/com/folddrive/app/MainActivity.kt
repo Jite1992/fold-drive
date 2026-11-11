@@ -203,6 +203,22 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Uses the classic activity result API")
+    /** HEIC / HEIF photos (Samsung camera setting) can't be shown in the app's screens: convert them to JPEG. */
+    private fun asJpegIfNeeded(uri: Uri): Uri = try {
+        val type = contentResolver.getType(uri) ?: ""
+        if (type.isEmpty() || type == "image/jpeg" || type == "image/png" || type == "image/webp" || !type.startsWith("image")) uri
+        else {
+            val bmp = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(contentResolver, uri)) { d, info, _ ->
+                val m = maxOf(info.size.width, info.size.height); if (m > 2400) d.setTargetSampleSize(m / 2400 + 1)
+                d.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+            val dir = java.io.File(cacheDir, "receipts").apply { mkdirs() }
+            val out = java.io.File(dir, "receipt_" + System.currentTimeMillis() + ".jpg")
+            out.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, it) }
+            androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", out)
+        }
+    } catch (_: Exception) { uri }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
@@ -210,6 +226,7 @@ class MainActivity : Activity() {
                 var result = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
                 val cam = cameraUri
                 if (result == null && resultCode == RESULT_OK && cam != null) result = arrayOf(cam)
+                result = result?.map { asJpegIfNeeded(it) }?.toTypedArray()
                 fileCallback?.onReceiveValue(result)
                 fileCallback = null
                 cameraUri = null

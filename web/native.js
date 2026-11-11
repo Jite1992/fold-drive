@@ -20,6 +20,10 @@
   FD.onResume = function () {
     FD.refreshNative();
     var a = document.activeElement;
+    if (FD.isPicking && FD.isPicking()) {   // a photo or file is being chosen: redraw after it arrives
+      setTimeout(function () { if (FD.picking) { FD.picking = 0; FD.render(); } }, 5000);   // nothing chosen (cancelled)
+      return;
+    }
     if (!(a && a.tagName === 'INPUT')) FD.render();
   };
 

@@ -453,7 +453,8 @@
       shrink(f).then(function (url) {
         var id = 'r' + Date.now();
         return putReceipt(id, url).then(function () { S.park = S.park || {}; S.park.receiptId = id; S.park.thumb = url; X.render(); if (FD.work && window.Android && window.Android.ocr) FD.work.ocr('pk:' + id, url); else FD.toast('Receipt photo added'); });
-      }).catch(function () { FD.toast('Could not read that photo.'); });
+      }).catch(function () { FD.toast('Could not read that photo. Try taking it with the camera instead.'); });
+      tg.value = '';
       return true;
     }
     return false;
